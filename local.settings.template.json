@@ -1,0 +1,15 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "USE_REAL_EMBEDDINGS": "true",
+    "AzureOpenAI:Endpoint": "https://YOUR-RESOURCE.openai.azure.com/",
+    "AzureOpenAI:ApiKey": "PASTE-YOUR-KEY-HERE",
+    "AzureOpenAI:EmbeddingDeployment": "text-embedding-3-large",
+    "AzureOpenAI:ChatDeployment": "gpt-4o-mini"
+  },
+  "ConnectionStrings": {
+    "SqlDb": "Server=tcp:your-server.database.windows.net,1433;Initial Catalog=your-db;User ID=your-user;Password=your-password;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+  }
+}
