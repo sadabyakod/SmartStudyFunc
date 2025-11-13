@@ -42,12 +42,16 @@ namespace SmartStudyFunc
 
         [Function(nameof(ProcessBlobFile))]
         public async Task Run(
-            [BlobTrigger("textbooks/{name}", Connection = "AzureWebJobsStorage")] Stream blobStream,
+            [BlobTrigger("textbooks/{className}/{subject}/{chapter}/{name}", Connection = "AzureWebJobsStorage")] Stream blobStream,
+            string className,
+            string subject,
+            string chapter,
             string name)
         {
             try
             {
-                _logger.LogInformation("Processing new file: {FileName}", name);
+                _logger.LogInformation("Processing new file: {FileName} | Class: {ClassName} | Subject: {Subject} | Chapter: {Chapter}", 
+                    name, className, subject, chapter);
 
                 // 1. Read blob stream to byte array
                 byte[] fileBytes = await ReadBlobAsync(blobStream);
@@ -61,7 +65,7 @@ namespace SmartStudyFunc
                     name, fileSize, fileExtension);
 
                 // 3. Insert file metadata to database
-                int fileId = await _db.InsertUploadedFile(name, fileSize, fileExtension);
+                int fileId = await _db.InsertUploadedFile(name, fileSize, fileExtension, className, subject, chapter);
                 _logger.LogInformation("Inserted file metadata, ID={FileId}", fileId);
 
                 // 4. Extract text from PDF

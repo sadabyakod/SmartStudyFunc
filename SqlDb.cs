@@ -23,12 +23,18 @@ namespace SmartStudyFunc
         // -----------------------------
         // Insert Uploaded File
         // -----------------------------
-        public async Task<int> InsertUploadedFile(string name, long sizeBytes, string fileType)
+        public async Task<int> InsertUploadedFile(
+            string name, 
+            long sizeBytes, 
+            string fileType,
+            string? className = null,
+            string? subject = null,
+            string? chapter = null)
         {
             const string sql = @"
-                INSERT INTO UploadedFiles (FileName, FileSizeBytes, FileType, UploadedOn)
+                INSERT INTO UploadedFiles (FileName, FileSizeBytes, FileType, ClassName, Subject, Chapter, UploadedOn)
                 OUTPUT INSERTED.Id
-                VALUES (@FileName, @FileSizeBytes, @FileType, SYSDATETIME())";
+                VALUES (@FileName, @FileSizeBytes, @FileType, @ClassName, @Subject, @Chapter, SYSDATETIME())";
 
             try
             {
@@ -39,7 +45,10 @@ namespace SmartStudyFunc
                 {
                     FileName = name,
                     FileSizeBytes = sizeBytes,
-                    FileType = fileType
+                    FileType = fileType,
+                    ClassName = className,
+                    Subject = subject,
+                    Chapter = chapter
                 });
             }
             catch (SqlException ex)
