@@ -126,41 +126,34 @@ namespace SmartStudyFunc
 
             for (int i = 0; i < chunks.Count; i++)
             {
-                try
-                {
-                    var chunk = chunks[i];
+                var chunk = chunks[i];
 
-                    // Generate metadata for chunk
-                    string topicTitle = GenerateTopicTitle(chunk, i);
-                    string summary = GenerateSummary(chunk);
-                    int tokenCount = EstimateTokenCount(chunk);
+                // Generate metadata for chunk
+                string topicTitle = GenerateTopicTitle(chunk, i);
+                string summary = GenerateSummary(chunk);
+                int tokenCount = EstimateTokenCount(chunk);
 
-                    // Insert chunk to database
-                    int chunkId = await _db.InsertChunk(
-                        uploadedFileId: fileId,
-                        topicTitle: topicTitle,
-                        summary: summary,
-                        chunkText: chunk,
-                        tokenCount: tokenCount,
-                        pageFrom: 0,  // TODO: Extract page numbers from PDF
-                        pageTo: 0,
-                        chunkType: "text"
-                    );
+                // Insert chunk to database
+                int chunkId = await _db.InsertChunk(
+                    uploadedFileId: fileId,
+                    topicTitle: topicTitle,
+                    summary: summary,
+                    chunkText: chunk,
+                    tokenCount: tokenCount,
+                    pageFrom: 0,  // TODO: Extract page numbers from PDF
+                    pageTo: 0,
+                    chunkType: "text"
+                );
 
-                    _logger.LogInformation(
-                        "Inserted chunk {Index}/{Total} -> ChunkId={ChunkId}",
-                        i + 1, chunks.Count, chunkId);
+                _logger.LogInformation(
+                    "Inserted chunk {Index}/{Total} -> ChunkId={ChunkId}",
+                    i + 1, chunks.Count, chunkId);
 
-                    // Create embedding and insert to database
-                    byte[] embedding = await _embeddingService.CreateEmbedding(chunk);
-                    await _db.InsertEmbedding(chunkId, embedding);
+                // Create embedding and insert to database
+                byte[] embedding = await _embeddingService.CreateEmbedding(chunk);
+                await _db.InsertEmbedding(chunkId, embedding);
 
-                    processedCount++;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error processing chunk {Index}", i + 1);
-                }
+                processedCount++;
             }
 
             return processedCount;
