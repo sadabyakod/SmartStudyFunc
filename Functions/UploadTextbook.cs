@@ -207,40 +207,55 @@ namespace SmartStudyFunc.Functions
                 return formData;
             }
 
-            using var reader = new StreamReader(req.Body);
-            var content = await reader.ReadToEndAsync();
+            // Read all bytes from request body
+            using var memStream = new MemoryStream();
+            await req.Body.CopyToAsync(memStream);
+            var bodyBytes = memStream.ToArray();
 
-            // Simple multipart parser - splits by boundary
-            var parts = content.Split(new[] { $"--{boundary}" }, StringSplitOptions.RemoveEmptyEntries);
+            var boundaryBytes = System.Text.Encoding.UTF8.GetBytes("--" + boundary);
+            var parts = SplitBytesByBoundary(bodyBytes, boundaryBytes);
 
             foreach (var part in parts)
             {
-                if (part.Trim() == "--") continue;
+                if (part.Length == 0 || (part.Length == 2 && part[0] == '-' && part[1] == '-'))
+                    continue;
 
-                var lines = part.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None);
-                var headerEndIndex = Array.FindIndex(lines, string.IsNullOrWhiteSpace);
+                // Find double CRLF (header/body separator)
+                var headerEnd = FindPattern(part, new byte[] { 13, 10, 13, 10 }); // \r\n\r\n
+                if (headerEnd < 0)
+                    headerEnd = FindPattern(part, new byte[] { 10, 10 }); // \n\n
 
-                if (headerEndIndex < 0) continue;
+                if (headerEnd < 0) continue;
+
+                var headerBytes = new byte[headerEnd];
+                Array.Copy(part, 0, headerBytes, 0, headerEnd);
+                var headers = System.Text.Encoding.UTF8.GetString(headerBytes);
 
                 // Parse Content-Disposition header
-                var dispositionLine = lines.FirstOrDefault(l => l.StartsWith("Content-Disposition:"));
-                if (dispositionLine == null) continue;
-
-                var nameMatch = System.Text.RegularExpressions.Regex.Match(dispositionLine, @"name=""([^""]+)""");
-                var filenameMatch = System.Text.RegularExpressions.Regex.Match(dispositionLine, @"filename=""([^""]+)""");
+                var nameMatch = System.Text.RegularExpressions.Regex.Match(headers, @"name=""([^""]+)""");
+                var filenameMatch = System.Text.RegularExpressions.Regex.Match(headers, @"filename=""([^""]+)""");
 
                 if (!nameMatch.Success) continue;
 
                 var fieldName = nameMatch.Groups[1].Value;
-                var dataStartIndex = headerEndIndex + 1;
-                var dataLines = lines.Skip(dataStartIndex).ToArray();
-                var data = string.Join("\n", dataLines).TrimEnd('\r', '\n', '-');
+                var dataStart = headerEnd + 4; // Skip \r\n\r\n
+                if (FindPattern(part, new byte[] { 13, 10, 13, 10 }) < 0)
+                    dataStart = headerEnd + 2; // Skip \n\n
+
+                var dataLength = part.Length - dataStart;
+                // Remove trailing \r\n
+                if (dataLength >= 2 && part[part.Length - 2] == 13 && part[part.Length - 1] == 10)
+                    dataLength -= 2;
+                else if (dataLength >= 1 && part[part.Length - 1] == 10)
+                    dataLength -= 1;
 
                 if (filenameMatch.Success)
                 {
                     // This is a file
                     var fileName = filenameMatch.Groups[1].Value;
-                    var fileBytes = System.Text.Encoding.Latin1.GetBytes(data);
+                    var fileBytes = new byte[dataLength];
+                    Array.Copy(part, dataStart, fileBytes, 0, dataLength);
+
                     formData.Files.Add(new FormFile
                     {
                         FileName = fileName,
@@ -252,11 +267,64 @@ namespace SmartStudyFunc.Functions
                 else
                 {
                     // This is a regular field
-                    formData[fieldName] = data.Trim();
+                    var fieldBytes = new byte[dataLength];
+                    Array.Copy(part, dataStart, fieldBytes, 0, dataLength);
+                    var fieldValue = System.Text.Encoding.UTF8.GetString(fieldBytes).Trim();
+                    formData[fieldName] = fieldValue;
                 }
             }
 
             return formData;
+        }
+
+        private static List<byte[]> SplitBytesByBoundary(byte[] data, byte[] boundary)
+        {
+            var parts = new List<byte[]>();
+            var start = 0;
+
+            while (start < data.Length)
+            {
+                var pos = FindPattern(data, boundary, start);
+                if (pos < 0)
+                {
+                    if (start < data.Length)
+                    {
+                        var remaining = new byte[data.Length - start];
+                        Array.Copy(data, start, remaining, 0, remaining.Length);
+                        parts.Add(remaining);
+                    }
+                    break;
+                }
+
+                if (pos > start)
+                {
+                    var part = new byte[pos - start];
+                    Array.Copy(data, start, part, 0, part.Length);
+                    parts.Add(part);
+                }
+
+                start = pos + boundary.Length;
+            }
+
+            return parts;
+        }
+
+        private static int FindPattern(byte[] data, byte[] pattern, int startIndex = 0)
+        {
+            for (int i = startIndex; i <= data.Length - pattern.Length; i++)
+            {
+                bool found = true;
+                for (int j = 0; j < pattern.Length; j++)
+                {
+                    if (data[i + j] != pattern[j])
+                    {
+                        found = false;
+                        break;
+                    }
+                }
+                if (found) return i;
+            }
+            return -1;
         }
     }
 
