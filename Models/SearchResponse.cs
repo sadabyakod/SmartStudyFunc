@@ -22,4 +22,16 @@ namespace SmartStudyFunc.Models
         /// </summary>
         public double Confidence { get; set; }
     }
+
+    /// <summary>
+    /// Extended response model including conversation tracking
+    /// </summary>
+    public class SearchResponseWithHistory : SearchResponse
+    {
+        /// <summary>
+        /// Unique identifier for the conversation thread
+        /// Used to maintain context across multiple queries
+        /// </summary>
+        public Guid ConversationId { get; set; }
+    }
 }

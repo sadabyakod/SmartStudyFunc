@@ -192,5 +192,68 @@ namespace SmartStudyFunc
                 throw new InvalidOperationException($"InsertRagSearchLog failed: {ex.Message}", ex);
             }
         }
+
+        // -----------------------------
+        // Chat History Methods
+        // -----------------------------
+        public async Task<List<ChatMessage>> GetConversationHistory(Guid conversationId, int maxMessages = 10)
+        {
+            var sql = @"
+                SELECT TOP (@MaxMessages) 
+                    Id, ConversationId, Role, Message, ChunksUsed, Confidence, CreatedOn
+                FROM ChatHistory
+                WHERE ConversationId = @ConversationId
+                ORDER BY CreatedOn DESC";
+
+            try
+            {
+                using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+
+                var messages = await conn.QueryAsync<ChatMessage>(sql, new
+                {
+                    ConversationId = conversationId,
+                    MaxMessages = maxMessages
+                });
+
+                return messages.Reverse().ToList(); // Return in chronological order
+            }
+            catch (SqlException ex)
+            {
+                throw new InvalidOperationException($"GetConversationHistory failed: {ex.Message}", ex);
+            }
+        }
+
+        public async Task<int> InsertChatMessage(
+            Guid conversationId,
+            string role,
+            string message,
+            string? chunksUsed = null,
+            double? confidence = null)
+        {
+            var sql = @"
+                INSERT INTO ChatHistory (ConversationId, Role, Message, ChunksUsed, Confidence)
+                VALUES (@ConversationId, @Role, @Message, @ChunksUsed, @Confidence);
+                SELECT CAST(SCOPE_IDENTITY() AS INT);";
+
+            try
+            {
+                using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+
+                return await conn.ExecuteScalarAsync<int>(sql, new
+                {
+                    ConversationId = conversationId,
+                    Role = role,
+                    Message = message,
+                    ChunksUsed = chunksUsed,
+                    Confidence = confidence
+                });
+            }
+            catch (SqlException ex)
+            {
+                throw new InvalidOperationException($"InsertChatMessage failed: {ex.Message}", ex);
+            }
+        }
     }
 }

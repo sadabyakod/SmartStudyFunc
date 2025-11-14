@@ -56,11 +56,11 @@ namespace SmartStudyFunc.Functions
             try
             {
                 // STEP A — Validate input
-                SearchRequest? searchRequest = null;
+                SearchRequestWithHistory? searchRequest = null;
                 try
                 {
                     var requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-                    searchRequest = JsonSerializer.Deserialize<SearchRequest>(requestBody, new JsonSerializerOptions
+                    searchRequest = JsonSerializer.Deserialize<SearchRequestWithHistory>(requestBody, new JsonSerializerOptions
                     {
                         PropertyNameCaseInsensitive = true
                     });
@@ -78,7 +78,9 @@ namespace SmartStudyFunc.Functions
                 }
 
                 var question = searchRequest.Question.Trim();
-                _logger.LogInformation("Processing question: {Question}", question);
+                var conversationId = searchRequest.ConversationId ?? Guid.NewGuid();
+                _logger.LogInformation("Processing question: {Question} (ConversationId: {ConversationId})", 
+                    question, conversationId);
 
                 // STEP B — Convert question to embedding
                 byte[] questionEmbedding;
@@ -115,20 +117,69 @@ namespace SmartStudyFunc.Functions
                         "Failed to retrieve matching chunks");
                 }
 
-                // STEP D — Build prompt for GPT-4o-mini
+                // STEP D — Retrieve conversation history (if exists)
+                List<ChatMessage> chatHistory = new List<ChatMessage>();
+                if (searchRequest.ConversationId.HasValue)
+                {
+                    try
+                    {
+                        chatHistory = await _db.GetConversationHistory(searchRequest.ConversationId.Value, maxMessages: 10);
+                        _logger.LogInformation("Retrieved {Count} previous messages for conversation {ConversationId}", 
+                            chatHistory.Count, conversationId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to retrieve chat history (continuing without it): {Message}", ex.Message);
+                        // Continue without chat history - not critical
+                    }
+                }
+
+                // Save user's question to chat history
+                try
+                {
+                    await _db.InsertChatMessage(
+                        conversationId: conversationId,
+                        role: "user",
+                        message: question
+                    );
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to save user message to chat history: {Message}", ex.Message);
+                    // Non-critical - continue
+                }
+
+                // STEP E — Build prompt for GPT-4o-mini with engaging, friendly tone
                 var contextText = string.Join("\n\n---\n\n", topChunks.Select(c => c.ChunkText));
-                var prompt = $@"Use ONLY the context below to answer briefly and accurately.
+                
+                var promptBuilder = new System.Text.StringBuilder();
+                promptBuilder.AppendLine("### ROLE: You are Smarty, a friendly and intelligent AI study assistant.");
+                promptBuilder.AppendLine("### TONE: Encouraging and conversational, like a kind teacher.");
+                promptBuilder.AppendLine("### TASK:");
+                promptBuilder.AppendLine("- Answer clearly and simply.");
+                promptBuilder.AppendLine("- End with a short follow-up question (e.g., 'Would you like an example?' or 'Should I explain more?').");
+                promptBuilder.AppendLine("- Use one emoji if it fits naturally.");
+                
+                // Include conversation history if available
+                if (chatHistory.Any())
+                {
+                    promptBuilder.AppendLine("\n### CONVERSATION HISTORY:");
+                    foreach (var msg in chatHistory)
+                    {
+                        promptBuilder.AppendLine($"{msg.Role.ToUpper()}: {msg.Message}");
+                    }
+                }
+                
+                promptBuilder.AppendLine("\n### CONTEXT (syllabus):");
+                promptBuilder.AppendLine(contextText);
+                promptBuilder.AppendLine("\n### STUDENT QUESTION:");
+                promptBuilder.AppendLine(question);
+                promptBuilder.AppendLine("\n### YOUR RESPONSE:");
+                
+                var prompt = promptBuilder.ToString();
 
-Context:
-{contextText}
-
-Question:
-{question}
-
-Answer:";
-
-                _logger.LogInformation("Built prompt with {ChunkCount} chunks, total length: {Length} chars", 
-                    topChunks.Count, contextText.Length);
+                _logger.LogInformation("Built prompt with {ChunkCount} chunks, {HistoryCount} history messages, total length: {Length} chars", 
+                    topChunks.Count, chatHistory.Count, contextText.Length);
 
                 // STEP E — Call Azure OpenAI GPT-4o-mini chat completion
                 string answer;
@@ -166,12 +217,31 @@ Answer:";
                     // Continue anyway - logging failure shouldn't break the response
                 }
 
-                // STEP G — Return JSON response
-                var response = new SearchResponse
+                // STEP G — Save AI's response to chat history
+                try
+                {
+                    await _db.InsertChatMessage(
+                        conversationId: conversationId,
+                        role: "assistant",
+                        message: answer,
+                        chunksUsed: chunkIdsString,
+                        confidence: confidence
+                    );
+                    _logger.LogInformation("Saved assistant response to chat history");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to save assistant message to chat history: {Message}", ex.Message);
+                    // Non-critical - continue
+                }
+
+                // STEP H — Return JSON response with ConversationId
+                var response = new SearchResponseWithHistory
                 {
                     Answer = answer,
                     ChunksUsed = chunkIds,
-                    Confidence = Math.Round(confidence, 4)
+                    Confidence = Math.Round(confidence, 4),
+                    ConversationId = conversationId
                 };
 
                 return await CreateSuccessResponse(req, response);
@@ -236,7 +306,7 @@ Answer:";
         /// <summary>
         /// Creates a successful JSON response
         /// </summary>
-        private async Task<HttpResponseData> CreateSuccessResponse(HttpRequestData req, SearchResponse data)
+        private async Task<HttpResponseData> CreateSuccessResponse(HttpRequestData req, object data)
         {
             var response = req.CreateResponse(HttpStatusCode.OK);
             response.Headers.Add("Content-Type", "application/json; charset=utf-8");
