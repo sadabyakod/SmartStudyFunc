@@ -43,9 +43,13 @@ namespace SmartStudyFunc
             _client = new OpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
 
             _logger?.LogInformation(
-                "OpenAI Service initialized with Endpoint={Endpoint}, EmbeddingModel={EmbeddingModel}, ChatModel={ChatModel}",
+                "OpenAI Service initialized - Endpoint={Endpoint}, EmbeddingDeployment={EmbeddingModel}, ChatDeployment={ChatModel}",
                 endpoint, _embeddingDeployment, _chatDeployment
             );
+            
+            // Debug log to verify configuration is loaded
+            _logger?.LogDebug("Configuration check - AzureOpenAI:Endpoint exists: {EndpointExists}, AzureOpenAI:ChatDeployment exists: {ChatExists}",
+                !string.IsNullOrEmpty(endpoint), !string.IsNullOrEmpty(_chatDeployment));
         }
 
         /// <summary>
@@ -181,16 +185,20 @@ namespace SmartStudyFunc
                     lastException = ex;
                     _logger?.LogWarning(
                         ex,
-                        "Transient error on chat completion request (attempt {Attempt}/{MaxRetries}): {Message}",
-                        attempt, MaxRetries, ex.Message
+                        "Transient error on chat completion request (attempt {Attempt}/{MaxRetries}): Status={Status}, ErrorCode={ErrorCode}, Message={Message}",
+                        attempt, MaxRetries, ex.Status, ex.ErrorCode, ex.Message
                     );
                     await Task.Delay(RetryDelayMs * attempt);
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, "Failed to get chat completion: {Message}", ex.Message);
+                    var errorDetails = ex is RequestFailedException rfe 
+                        ? $"Status={rfe.Status}, ErrorCode={rfe.ErrorCode}" 
+                        : ex.GetType().Name;
+                    _logger?.LogError(ex, "Failed to get chat completion: {ErrorDetails}, Message={Message}, Deployment={Deployment}", 
+                        errorDetails, ex.Message, _chatDeployment);
                     throw new InvalidOperationException(
-                        $"Failed to get chat completion from Azure OpenAI: {ex.Message}", ex
+                        $"Failed to get chat completion from Azure OpenAI (deployment: {_chatDeployment}): {ex.Message}", ex
                     );
                 }
             }

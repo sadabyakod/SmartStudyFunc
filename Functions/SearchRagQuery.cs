@@ -139,9 +139,10 @@ Answer:";
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to get chat completion from OpenAI");
+                    _logger.LogError(ex, "Failed to get chat completion from OpenAI. Error: {ErrorType} - {ErrorMessage}. InnerException: {InnerException}", 
+                        ex.GetType().Name, ex.Message, ex.InnerException?.Message ?? "None");
                     return await CreateErrorResponse(req, HttpStatusCode.InternalServerError, 
-                        "Failed to generate answer");
+                        $"Failed to generate answer: {ex.Message}");
                 }
 
                 // STEP F — Log results into RAGSearchLogs
