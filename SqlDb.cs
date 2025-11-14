@@ -137,11 +137,11 @@ namespace SmartStudyFunc
                     fc.Id AS ChunkId,
                     fc.ChunkText,
                     fc.UploadedFileId AS FileId,
-                    fc.ChunkIndex,
-                    ce.EmbeddingVector AS Embedding
+                    0 AS ChunkIndex,
+                    ce.Embedding
                 FROM FileChunks fc
                 INNER JOIN ChunkEmbeddings ce ON fc.Id = ce.ChunkId
-                WHERE ce.EmbeddingVector IS NOT NULL";
+                WHERE ce.Embedding IS NOT NULL";
 
             try
             {
