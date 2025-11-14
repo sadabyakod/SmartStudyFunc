@@ -36,8 +36,8 @@ namespace SmartStudyFunc
             _embeddingDeployment = configuration["AzureOpenAI:EmbeddingDeployment"]
                 ?? configuration["AzureOpenAI:DeploymentEmbedding"]
                 ?? throw new ArgumentException("Missing configuration: AzureOpenAI:EmbeddingDeployment");
-            _chatDeployment = configuration["AzureOpenAI:DeploymentChat"] 
-                ?? throw new ArgumentException("Missing configuration: AzureOpenAI:DeploymentChat");
+            _chatDeployment = configuration["AzureOpenAI:ChatDeployment"] 
+                ?? throw new ArgumentException("Missing configuration: AzureOpenAI:ChatDeployment");
 
             // Initialize Azure OpenAI client
             _client = new OpenAIClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
