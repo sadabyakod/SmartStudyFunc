@@ -50,8 +50,12 @@ namespace SmartStudyFunc
         {
             try
             {
-                _logger.LogInformation("Processing new file: {FileName} | Class: {ClassName} | Subject: {Subject} | Chapter: {Chapter}", 
-                    name, className, subject, chapter);
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("NEW FILE UPLOADED TO BLOB STORAGE");
+                _logger.LogInformation("File: {FileName}", name);
+                _logger.LogInformation("Path: textbooks/{ClassName}/{Subject}/{Chapter}/{Name}", className, subject, chapter, name);
+                _logger.LogInformation("Timestamp: {Timestamp}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss UTC"));
+                _logger.LogInformation("========================================");
 
                 // 1. Read blob stream to byte array
                 byte[] fileBytes = await ReadBlobAsync(blobStream);
@@ -79,13 +83,20 @@ namespace SmartStudyFunc
                 // 6. Process each chunk: insert chunk + create embedding + insert embedding
                 int processedCount = await ProcessChunksAsync(chunks, fileId);
 
-                _logger.LogInformation(
-                    "Processing complete: File={Name}, FileId={FileId}, Chunks={Count}",
-                    name, fileId, processedCount);
+                _logger.LogInformation("========================================");
+                _logger.LogInformation("PROCESSING COMPLETE");
+                _logger.LogInformation("File: {Name}", name);
+                _logger.LogInformation("File ID: {FileId}", fileId);
+                _logger.LogInformation("Total Chunks Created: {Count}", processedCount);
+                _logger.LogInformation("Status: SUCCESS");
+                _logger.LogInformation("========================================");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "CRITICAL ERROR processing file {FileName}", name);
+                _logger.LogError("========================================");
+                _logger.LogError("PROCESSING FAILED");
+                _logger.LogError(ex, "Error processing file: {FileName}", name);
+                _logger.LogError("========================================");
                 throw;
             }
         }
