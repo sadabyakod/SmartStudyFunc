@@ -11,12 +11,15 @@
       "default": "Warning",
       "Host": "Warning",
       "Function": "Information",
-      "Host.Results": "Warning",
-      "Host.Aggregator": "Warning",
-      "Microsoft": "Warning",
+      "Host.Results": "Error",
+      "Host.Aggregator": "Error",
+      "Microsoft": "Error",
       "Microsoft.Hosting.Lifetime": "Warning",
-      "Azure.Core": "Warning",
-      "Azure.Storage": "Warning"
+      "Azure.Core": "Error",
+      "Azure.Storage": "Error",
+      "Azure.Storage.Blobs": "Error",
+      "Azure.Storage.Queues": "Error",
+      "Host.Triggers.BlobTrigger": "Warning"
     }
   },
   "extensions": {
