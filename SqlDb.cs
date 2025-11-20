@@ -106,8 +106,8 @@ namespace SmartStudyFunc
         public async Task InsertEmbedding(int chunkId, byte[] embedding)
         {
             const string sql = @"
-                INSERT INTO ChunkEmbeddings (ChunkId, Embedding, CreatedOn)
-                VALUES (@ChunkId, @Embedding, SYSDATETIME())";
+                INSERT INTO ChunkEmbeddings (ChunkId, EmbeddingVector, CreatedAt, CreatedOn)
+                VALUES (@ChunkId, @EmbeddingVector, SYSDATETIME(), SYSDATETIME())";
 
             try
             {
@@ -117,7 +117,7 @@ namespace SmartStudyFunc
                 await conn.ExecuteAsync(sql, new
                 {
                     ChunkId = chunkId,
-                    Embedding = embedding
+                    EmbeddingVector = embedding
                 });
             }
             catch (SqlException ex)
