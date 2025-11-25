@@ -36,25 +36,40 @@ namespace SmartStudyFunc
                 OUTPUT INSERTED.Id
                 VALUES (@FileName, @FileSizeBytes, @FileType, @ClassName, @Subject, @Chapter, SYSDATETIME())";
 
-            try
-            {
-                using var conn = new SqlConnection(_connectionString);
-                await conn.OpenAsync();
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
 
-                return await conn.ExecuteScalarAsync<int>(sql, new
-                {
-                    FileName = name,
-                    FileSizeBytes = sizeBytes,
-                    FileType = fileType,
-                    ClassName = className,
-                    Subject = subject,
-                    Chapter = chapter
-                });
-            }
-            catch (SqlException ex)
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                throw new InvalidOperationException($"InsertUploadedFile failed: {ex.Message}", ex);
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+
+                    return await conn.ExecuteScalarAsync<int>(sql, new
+                    {
+                        FileName = name,
+                        FileSizeBytes = sizeBytes,
+                        FileType = fileType,
+                        ClassName = className,
+                        Subject = subject,
+                        Chapter = chapter
+                    });
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (SqlException ex)
+                {
+                    throw new InvalidOperationException($"InsertUploadedFile failed: {ex.Message}", ex);
+                }
             }
+
+            throw new InvalidOperationException($"InsertUploadedFile failed after {maxRetries} attempts: {lastException?.Message}", lastException);
         }
 
         // -----------------------------
@@ -77,27 +92,42 @@ namespace SmartStudyFunc
                 VALUES 
                 (@UploadedFileId, @TopicTitle, @Summary, @ChunkText, @TokenCount, @PageFrom, @PageTo, @ChunkType, SYSDATETIME())";
 
-            try
-            {
-                using var conn = new SqlConnection(_connectionString);
-                await conn.OpenAsync();
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
 
-                return await conn.ExecuteScalarAsync<int>(sql, new
-                {
-                    UploadedFileId = uploadedFileId,
-                    TopicTitle = topicTitle,
-                    Summary = summary,
-                    ChunkText = chunkText,
-                    TokenCount = tokenCount,
-                    PageFrom = pageFrom,
-                    PageTo = pageTo,
-                    ChunkType = chunkType
-                });
-            }
-            catch (SqlException ex)
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                throw new InvalidOperationException($"InsertChunk failed: {ex.Message}", ex);
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+
+                    return await conn.ExecuteScalarAsync<int>(sql, new
+                    {
+                        UploadedFileId = uploadedFileId,
+                        TopicTitle = topicTitle,
+                        Summary = summary,
+                        ChunkText = chunkText,
+                        TokenCount = tokenCount,
+                        PageFrom = pageFrom,
+                        PageTo = pageTo,
+                        ChunkType = chunkType
+                    });
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (SqlException ex)
+                {
+                    throw new InvalidOperationException($"InsertChunk failed: {ex.Message}", ex);
+                }
             }
+
+            throw new InvalidOperationException($"InsertChunk failed after {maxRetries} attempts: {lastException?.Message}", lastException);
         }
 
         // -----------------------------
@@ -109,21 +139,37 @@ namespace SmartStudyFunc
                 INSERT INTO ChunkEmbeddings (ChunkId, EmbeddingVector, CreatedAt, CreatedOn)
                 VALUES (@ChunkId, @EmbeddingVector, SYSDATETIME(), SYSDATETIME())";
 
-            try
-            {
-                using var conn = new SqlConnection(_connectionString);
-                await conn.OpenAsync();
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
 
-                await conn.ExecuteAsync(sql, new
-                {
-                    ChunkId = chunkId,
-                    EmbeddingVector = embedding
-                });
-            }
-            catch (SqlException ex)
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                throw new InvalidOperationException($"InsertEmbedding failed: {ex.Message}", ex);
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+
+                    await conn.ExecuteAsync(sql, new
+                    {
+                        ChunkId = chunkId,
+                        EmbeddingVector = embedding
+                    });
+                    return;
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (SqlException ex)
+                {
+                    throw new InvalidOperationException($"InsertEmbedding failed: {ex.Message}", ex);
+                }
             }
+
+            throw new InvalidOperationException($"InsertEmbedding failed after {maxRetries} attempts: {lastException?.Message}", lastException);
         }
 
         // -----------------------------
@@ -143,18 +189,33 @@ namespace SmartStudyFunc
                 INNER JOIN ChunkEmbeddings ce ON fc.Id = ce.ChunkId
                 WHERE ce.Embedding IS NOT NULL";
 
-            try
-            {
-                using var conn = new SqlConnection(_connectionString);
-                await conn.OpenAsync();
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
 
-                var results = await conn.QueryAsync<SearchResultChunk>(sql);
-                return results.ToList();
-            }
-            catch (SqlException ex)
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
-                throw new InvalidOperationException($"GetAllChunksWithEmbeddings failed: {ex.Message}", ex);
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+
+                    var results = await conn.QueryAsync<SearchResultChunk>(sql);
+                    return results.ToList();
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (SqlException ex)
+                {
+                    throw new InvalidOperationException($"GetAllChunksWithEmbeddings failed: {ex.Message}", ex);
+                }
             }
+
+            throw new InvalidOperationException($"GetAllChunksWithEmbeddings failed after {maxRetries} attempts: {lastException?.Message}", lastException);
         }
 
         // -----------------------------
@@ -254,6 +315,22 @@ namespace SmartStudyFunc
             {
                 throw new InvalidOperationException($"InsertChatMessage failed: {ex.Message}", ex);
             }
+        }
+
+        /// <summary>
+        /// Determines if a SQL exception is a transient error that can be retried.
+        /// </summary>
+        private static bool IsTransientError(SqlException ex)
+        {
+            // Common transient error codes:
+            // -2: Timeout
+            // -1: Connection broken
+            // 1205: Deadlock victim
+            // 40197, 40501, 40613: Azure SQL transient errors
+            // 40540, 40544, 40549, 40550, 40551, 40552, 40553: Azure SQL resource limits
+            // 49918, 49919, 49920: Azure SQL resource issues
+            int[] transientErrorNumbers = { -2, -1, 1205, 40197, 40501, 40613, 40540, 40544, 40549, 40550, 40551, 40552, 40553, 49918, 49919, 49920 };
+            return transientErrorNumbers.Contains(ex.Number);
         }
     }
 }

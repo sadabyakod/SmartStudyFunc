@@ -32,23 +32,42 @@ namespace SmartStudyFunc
             if (string.IsNullOrWhiteSpace(text))
                 text = ".";
 
-            try
+            int maxRetries = 3;
+            int retryDelayMs = 1000;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
             {
-                var response = await _client.GetEmbeddingsAsync(
-                    new EmbeddingsOptions(_deploymentName, new[] { text }));
+                try
+                {
+                    var response = await _client.GetEmbeddingsAsync(
+                        new EmbeddingsOptions(_deploymentName, new[] { text }));
 
-                var vector = response.Value.Data[0].Embedding.ToArray(); // float[]
+                    var vector = response.Value.Data[0].Embedding.ToArray(); // float[]
 
-                // Convert float[] to byte[]
-                byte[] bytes = new byte[vector.Length * sizeof(float)];
-                Buffer.BlockCopy(vector, 0, bytes, 0, bytes.Length);
+                    // Convert float[] to byte[]
+                    byte[] bytes = new byte[vector.Length * sizeof(float)];
+                    Buffer.BlockCopy(vector, 0, bytes, 0, bytes.Length);
 
-                return bytes;
+                    return bytes;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 429 && attempt < maxRetries)
+                {
+                    // Rate limit hit, wait and retry with exponential backoff
+                    int delay = retryDelayMs * (int)Math.Pow(2, attempt);
+                    await Task.Delay(delay);
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    if (attempt == maxRetries)
+                        throw new InvalidOperationException($"Error generating embeddings after {maxRetries + 1} attempts: {ex.Message}", ex);
+                    
+                    // For other transient errors, retry with delay
+                    await Task.Delay(retryDelayMs * (attempt + 1));
+                }
             }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException($"Error generating embeddings: {ex.Message}", ex);
-            }
+
+            throw new InvalidOperationException("Failed to generate embeddings after all retry attempts.");
         }
     }
 }

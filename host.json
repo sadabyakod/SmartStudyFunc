@@ -8,18 +8,18 @@
       }
     },
     "logLevel": {
-      "default": "Warning",
-      "Host": "Warning",
+      "default": "Information",
+      "Host": "Information",
       "Function": "Information",
-      "Host.Results": "Error",
-      "Host.Aggregator": "Error",
-      "Microsoft": "Error",
-      "Microsoft.Hosting.Lifetime": "Warning",
-      "Azure.Core": "Error",
-      "Azure.Storage": "Error",
-      "Azure.Storage.Blobs": "Error",
-      "Azure.Storage.Queues": "Error",
-      "Host.Triggers.BlobTrigger": "Warning"
+      "Host.Results": "Information",
+      "Host.Aggregator": "Information",
+      "Microsoft": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information",
+      "Azure.Core": "Warning",
+      "Azure.Storage": "Warning",
+      "Azure.Storage.Blobs": "Warning",
+      "Azure.Storage.Queues": "Warning",
+      "Host.Triggers.BlobTrigger": "Information"
     }
   },
   "extensions": {
@@ -30,6 +30,26 @@
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization"
       }
+    },
+    "blobs": {
+      "maxDegreeOfParallelism": 1
     }
+  },
+  "functionTimeout": "00:30:00",
+  "singleton": {
+    "lockPeriod": "00:00:30",
+    "listenerLockPeriod": "00:01:00",
+    "listenerLockRecoveryPollingInterval": "00:01:00",
+    "lockAcquisitionTimeout": "00:02:00",
+    "lockAcquisitionPollingInterval": "00:00:05"
+  },
+  "concurrency": {
+    "dynamicConcurrencyEnabled": false,
+    "maximumFunctionConcurrency": 2
+  },
+  "retry": {
+    "strategy": "fixedDelay",
+    "maxRetryCount": 2,
+    "delayInterval": "00:00:05"
   }
 }

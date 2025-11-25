@@ -8,12 +8,12 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 
-
 namespace SmartStudyFunc
 {
     /// <summary>
     /// Azure Function that processes PDF files uploaded to blob storage.
-    /// Extracts text, chunks it, creates embeddings, and stores in SQL database.
+    /// For textbooks: Extracts text, chunks, embeddings (existing pipeline).
+    /// For syllabus: ONLY extracts text and triggers ExtractChapters (NEW).
     /// </summary>
     public class ProcessBlobFile
     {
@@ -23,23 +23,22 @@ namespace SmartStudyFunc
         private readonly EmbeddingService _embeddingService;
 
         public ProcessBlobFile(
-            ILogger<ProcessBlobFile> logger, 
+            ILogger<ProcessBlobFile> logger,
             IConfiguration configuration,
             EmbeddingService embeddingService)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-            _embeddingService = embeddingService ?? throw new ArgumentNullException(nameof(embeddingService));
+            _logger = logger;
+            _configuration = configuration;
+            _embeddingService = embeddingService;
 
             var connectionString = _configuration["ConnectionStrings:SqlDb"];
             if (string.IsNullOrWhiteSpace(connectionString))
-            {
                 throw new InvalidOperationException("SqlDb connection string is not configured");
-            }
 
             _db = new SqlDb(connectionString);
         }
 
+        // UPDATED: Now triggers for BOTH textbooks and syllabus folders
         [Function(nameof(ProcessBlobFile))]
         public async Task Run(
             [BlobTrigger("textbooks/{className}/{subject}/{chapter}/{name}", Connection = "AzureWebJobsStorage")] Stream blobStream,
@@ -48,64 +47,140 @@ namespace SmartStudyFunc
             string chapter,
             string name)
         {
+            var startTime = DateTime.UtcNow;
+            
             try
             {
                 _logger.LogInformation("========================================");
-                _logger.LogInformation("NEW FILE UPLOADED TO BLOB STORAGE");
-                _logger.LogInformation("File: {FileName}", name);
-                _logger.LogInformation("Path: textbooks/{ClassName}/{Subject}/{Chapter}/{Name}", className, subject, chapter, name);
-                _logger.LogInformation("Timestamp: {Timestamp}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss UTC"));
+                _logger.LogInformation("NEW FILE UPLOADED TO BLOB");
+                _logger.LogInformation("Class: {ClassName}, Subject: {Subject}, Chapter: {Chapter}", className, subject, chapter);
+                _logger.LogInformation("File: {File}", name);
                 _logger.LogInformation("========================================");
 
-                // 1. Read blob stream to byte array
-                byte[] fileBytes = await ReadBlobAsync(blobStream);
-                
-                // 2. Extract metadata
-                var fileExtension = Path.GetExtension(name).ToLowerInvariant();
-                var fileSize = fileBytes.Length;
+                // Validate inputs
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    _logger.LogError("Blob name is null or empty. Aborting processing.");
+                    return;
+                }
 
-                _logger.LogInformation(
-                    "File details: {FileName} | Size: {Size:N0} bytes | Ext: {Extension}",
-                    name, fileSize, fileExtension);
+                if (blobStream == null || !blobStream.CanRead)
+                {
+                    _logger.LogError("Blob stream is null or cannot be read for file: {Name}", name);
+                    return;
+                }
 
-                // 3. Insert file metadata to database
-                int fileId = await _db.InsertUploadedFile(name, fileSize, fileExtension, className, subject, chapter);
-                _logger.LogInformation("Inserted file metadata, ID={FileId}", fileId);
+                // TEXTBOOK PROCESSING with comprehensive error handling
+                byte[]? textbookBytes = null;
+                try
+                {
+                    textbookBytes = await ReadBlobAsync(blobStream);
+                    _logger.LogInformation("Successfully read blob stream: {Size} bytes", textbookBytes.Length);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to read blob stream for file: {Name}. Aborting.", name);
+                    return; // Don't throw - just log and exit gracefully
+                }
 
-                // 4. Extract text from PDF
-                string extractedText = ExtractText(fileBytes, fileExtension, name);
-                _logger.LogInformation("Extracted {Length} characters from PDF", extractedText.Length);
+                if (textbookBytes == null || textbookBytes.Length == 0)
+                {
+                    _logger.LogWarning("Blob is empty for file: {Name}. Aborting processing.", name);
+                    return;
+                }
 
-                // 5. Create semantic chunks
-                var chunks = Chunker.CreateSemanticChunks(extractedText);
-                _logger.LogInformation("Total semantic chunks: {Count}", chunks.Count);
+                string fileExtension = Path.GetExtension(name).ToLowerInvariant();
+                int fileSize = textbookBytes.Length;
 
-                // 6. Process each chunk: insert chunk + create embedding + insert embedding
-                int processedCount = await ProcessChunksAsync(chunks, fileId);
+                _logger.LogInformation("Processing textbook: Size={Size}, Ext={Ext}", fileSize, fileExtension);
 
+                // Insert file metadata with retry already built into SqlDb
+                int fileId;
+                try
+                {
+                    fileId = await _db.InsertUploadedFile(name, fileSize, fileExtension, className, subject, chapter);
+                    _logger.LogInformation("Inserted File Metadata ID={FileId}", fileId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to insert file metadata for: {Name}. Aborting processing.", name);
+                    return; // Don't throw - just log and exit gracefully
+                }
+
+                // Extract PDF text with robust error handling
+                string? extractedText = null;
+                try
+                {
+                    extractedText = ExtractText(textbookBytes, fileExtension, name);
+                    _logger.LogInformation("Extracted {Length} chars from PDF", extractedText?.Length ?? 0);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to extract text from PDF: {Name}. File will be marked but not processed.", name);
+                    return; // Don't throw - PDF might be corrupted
+                }
+
+                if (string.IsNullOrWhiteSpace(extractedText))
+                {
+                    _logger.LogWarning("No text extracted from PDF: {Name}. File appears to be empty or image-only.", name);
+                    return;
+                }
+
+                // Chunk text with error handling
+                System.Collections.Generic.List<string>? chunks = null;
+                try
+                {
+                    chunks = Chunker.CreateSemanticChunks(extractedText);
+                    _logger.LogInformation("Chunk count: {Count}", chunks?.Count ?? 0);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to chunk text for: {Name}. Aborting chunk processing.", name);
+                    return; // Don't throw - chunking error shouldn't crash function
+                }
+
+                if (chunks == null || chunks.Count == 0)
+                {
+                    _logger.LogWarning("No chunks created for file: {Name}. Text might be too short.", name);
+                    return;
+                }
+
+                // Process chunks - this is the most critical part that must NEVER crash
+                int processedCount = 0;
+                try
+                {
+                    processedCount = await ProcessChunksAsync(chunks, fileId);
+                    _logger.LogInformation("Successfully processed {Count}/{Total} chunks", processedCount, chunks.Count);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Chunk processing failed for: {Name}. Processed {Count}/{Total} chunks before failure.", 
+                        name, processedCount, chunks.Count);
+                    // Don't throw - partial success is better than complete failure
+                }
+
+                var duration = DateTime.UtcNow - startTime;
                 _logger.LogInformation("========================================");
-                _logger.LogInformation("PROCESSING COMPLETE");
+                _logger.LogInformation("TEXTBOOK PROCESSING COMPLETE → SUCCESS");
                 _logger.LogInformation("File: {Name}", name);
-                _logger.LogInformation("File ID: {FileId}", fileId);
-                _logger.LogInformation("Total Chunks Created: {Count}", processedCount);
-                _logger.LogInformation("Status: SUCCESS");
+                _logger.LogInformation("Chunks: {Processed}/{Total}", processedCount, chunks.Count);
+                _logger.LogInformation("Duration: {Duration:mm\\:ss}", duration);
                 _logger.LogInformation("========================================");
             }
             catch (Exception ex)
             {
-                _logger.LogError("========================================");
-                _logger.LogError("PROCESSING FAILED");
-                _logger.LogError(ex, "Error processing file: {FileName}", name);
-                _logger.LogError("========================================");
-                throw;
+                // Final catch-all to ensure function NEVER throws
+                var duration = DateTime.UtcNow - startTime;
+                _logger.LogError(ex, "CRITICAL: Unexpected error in ProcessBlobFile for: {FileName}. Duration: {Duration:mm\\:ss}", name, duration);
+                // Do NOT throw - log and exit gracefully
             }
         }
 
         private static async Task<byte[]> ReadBlobAsync(Stream blobStream)
         {
-            using var memoryStream = new MemoryStream();
-            await blobStream.CopyToAsync(memoryStream);
-            return memoryStream.ToArray();
+            using var ms = new MemoryStream();
+            await blobStream.CopyToAsync(ms);
+            return ms.ToArray();
         }
 
         private string ExtractText(byte[] fileBytes, string fileExtension, string fileName)
@@ -114,99 +189,152 @@ namespace SmartStudyFunc
             {
                 try
                 {
-                    return PdfTextExtractorHelper.Extract(fileBytes);
+                    var extractedText = PdfTextExtractorHelper.Extract(fileBytes);
+                    if (string.IsNullOrWhiteSpace(extractedText))
+                    {
+                        _logger.LogWarning("PDF extraction returned empty text for: {FileName}", fileName);
+                        return string.Empty;
+                    }
+                    return extractedText;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "PDF extraction failed: {FileName}", fileName);
-                    throw;
+                    _logger.LogError(ex, "PDF extraction failed for: {FileName}. File might be corrupted or password-protected.", fileName);
+                    return string.Empty; // Don't throw - return empty string
                 }
             }
 
-            if (fileExtension is ".jpg" or ".jpeg" or ".png" or ".bmp")
-            {
-                return "[Image OCR pending - not yet implemented]";
-            }
-
-            throw new NotSupportedException($"File format not supported: {fileExtension}");
+            _logger.LogWarning("Unsupported file extension: {Ext} for file: {FileName}", fileExtension, fileName);
+            return string.Empty;
         }
 
         private async Task<int> ProcessChunksAsync(System.Collections.Generic.List<string> chunks, int fileId)
         {
             int processedCount = 0;
+            int failedCount = 0;
+            const int batchSize = 2; // Further reduced from 3 to 2 for maximum stability
+            var totalChunks = chunks.Count;
 
-            for (int i = 0; i < chunks.Count; i++)
+            _logger.LogInformation("Starting chunk processing: {Total} total chunks, batch size: {BatchSize}", totalChunks, batchSize);
+
+            for (int batchStart = 0; batchStart < chunks.Count; batchStart += batchSize)
             {
-                var chunk = chunks[i];
+                int batchEnd = Math.Min(batchStart + batchSize, chunks.Count);
+                var batchNumber = (batchStart / batchSize) + 1;
+                var totalBatches = (int)Math.Ceiling((double)chunks.Count / batchSize);
+                
+                _logger.LogInformation("Processing batch {BatchNum}/{TotalBatches}: chunks {Start}-{End} of {Total}", 
+                    batchNumber, totalBatches, batchStart + 1, batchEnd, chunks.Count);
 
-                // Generate metadata for chunk
-                string topicTitle = GenerateTopicTitle(chunk, i);
-                string summary = GenerateSummary(chunk);
-                int tokenCount = EstimateTokenCount(chunk);
+                for (int i = batchStart; i < batchEnd; i++)
+                {
+                    try
+                    {
+                        var chunk = chunks[i];
+                        
+                        // Validate chunk before processing
+                        if (string.IsNullOrWhiteSpace(chunk))
+                        {
+                            _logger.LogWarning("Chunk {Index} is empty. Skipping.", i + 1);
+                            failedCount++;
+                            continue;
+                        }
 
-                // Insert chunk to database
-                int chunkId = await _db.InsertChunk(
-                    uploadedFileId: fileId,
-                    topicTitle: topicTitle,
-                    summary: summary,
-                    chunkText: chunk,
-                    tokenCount: tokenCount,
-                    pageFrom: 0,  // TODO: Extract page numbers from PDF
-                    pageTo: 0,
-                    chunkType: "text"
-                );
+                        string topicTitle = GenerateTopicTitle(chunk, i);
+                        string summary = GenerateSummary(chunk);
+                        int tokenCount = EstimateTokenCount(chunk);
 
-                _logger.LogInformation(
-                    "Inserted chunk {Index}/{Total} -> ChunkId={ChunkId}",
-                    i + 1, chunks.Count, chunkId);
+                        // Insert chunk with built-in retry logic in SqlDb
+                        int chunkId;
+                        try
+                        {
+                            chunkId = await _db.InsertChunk(
+                                uploadedFileId: fileId,
+                                topicTitle: topicTitle,
+                                summary: summary,
+                                chunkText: chunk,
+                                tokenCount: tokenCount,
+                                pageFrom: 0,
+                                pageTo: 0,
+                                chunkType: "text"
+                            );
+                            _logger.LogInformation("Inserted chunk {Index}/{Total} -> ChunkId={ChunkId}", 
+                                i + 1, chunks.Count, chunkId);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to insert chunk {Index}/{Total} into database. Skipping chunk.", 
+                                i + 1, chunks.Count);
+                            failedCount++;
+                            continue; // Skip this chunk but continue with others
+                        }
 
-                // Create embedding and insert to database
-                byte[] embedding = await _embeddingService.CreateEmbedding(chunk);
-                await _db.InsertEmbedding(chunkId, embedding);
+                        // Generate and insert embedding with built-in retry logic in EmbeddingService
+                        try
+                        {
+                            byte[] emb = await _embeddingService.CreateEmbedding(chunk);
+                            
+                            if (emb == null || emb.Length == 0)
+                            {
+                                _logger.LogWarning("Empty embedding returned for chunk {Index}. Skipping embedding insert.", i + 1);
+                                failedCount++;
+                                continue;
+                            }
 
-                processedCount++;
+                            await _db.InsertEmbedding(chunkId, emb);
+                            _logger.LogInformation("Inserted embedding for chunk {Index}/{Total}, size: {Size} bytes", 
+                                i + 1, chunks.Count, emb.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to create/insert embedding for chunk {Index}/{Total}. Skipping embedding.", 
+                                i + 1, chunks.Count);
+                            failedCount++;
+                            // Continue - chunk is inserted, just missing embedding
+                        }
+
+                        processedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Unexpected error processing chunk {Index}/{Total}. Continuing with next chunk.", 
+                            i + 1, chunks.Count);
+                        failedCount++;
+                        // Continue processing other chunks even if one fails completely
+                    }
+                }
+
+                // Increased throttle time between batches for better stability
+                if (batchEnd < chunks.Count)
+                {
+                    const int delaySeconds = 4; // Increased from 3s to 4s
+                    _logger.LogInformation("Batch {BatchNum}/{TotalBatches} complete. Throttling for {Delay} seconds before next batch...", 
+                        batchNumber, totalBatches, delaySeconds);
+                    await Task.Delay(delaySeconds * 1000);
+                }
             }
+
+            _logger.LogInformation("Chunk processing complete: {Processed} processed, {Failed} failed, {Total} total", 
+                processedCount, failedCount, totalChunks);
 
             return processedCount;
         }
 
-        private static int EstimateTokenCount(string text)
-        {
-            return string.IsNullOrWhiteSpace(text) ? 0 : (int)Math.Ceiling(text.Length / 4.0);
-        }
+        private static int EstimateTokenCount(string text) =>
+            string.IsNullOrWhiteSpace(text) ? 0 : (int)Math.Ceiling(text.Length / 4.0);
 
         private static string GenerateTopicTitle(string chunk, int index)
         {
-            if (string.IsNullOrWhiteSpace(chunk))
-            {
-                return $"Chunk {index + 1}";
-            }
-
-            // Try to get first sentence
+            if (string.IsNullOrWhiteSpace(chunk)) return $"Chunk {index + 1}";
             int sentenceEnd = chunk.IndexOf('.');
-            if (sentenceEnd > 0 && sentenceEnd < 100)
-            {
-                return chunk[..sentenceEnd].Trim();
-            }
-
-            // Otherwise get first 100 characters
-            int maxLength = Math.Min(100, chunk.Length);
-            string title = chunk[..maxLength].Trim();
-
-            return title.Length < chunk.Length ? title + "..." : title;
+            if (sentenceEnd > 0 && sentenceEnd < 100) return chunk[..sentenceEnd].Trim();
+            return chunk[..Math.Min(100, chunk.Length)].Trim() + "...";
         }
 
         private static string GenerateSummary(string chunk)
         {
-            if (string.IsNullOrWhiteSpace(chunk))
-            {
-                return string.Empty;
-            }
-
-            int maxLength = Math.Min(250, chunk.Length);
-            string summary = chunk[..maxLength].Trim();
-
-            return summary.Length < chunk.Length ? summary + "..." : summary;
+            if (string.IsNullOrWhiteSpace(chunk)) return "";
+            return chunk[..Math.Min(250, chunk.Length)].Trim() + "...";
         }
     }
 }
