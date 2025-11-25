@@ -11,13 +11,27 @@ namespace SmartStudyFunc
     public class SqlDb
     {
         private readonly string _connectionString;
+        private const int DefaultCommandTimeout = 120; // 2 minutes
+        private const int DefaultConnectionTimeout = 30; // 30 seconds
 
         public SqlDb(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString))
                 throw new ArgumentNullException(nameof(connectionString));
 
-            _connectionString = connectionString;
+            // Ensure connection string has timeout settings
+            var builder = new SqlConnectionStringBuilder(connectionString)
+            {
+                ConnectTimeout = DefaultConnectionTimeout,
+                CommandTimeout = DefaultCommandTimeout,
+                ConnectRetryCount = 3,
+                ConnectRetryInterval = 10,
+                Pooling = true,
+                MinPoolSize = 0,
+                MaxPoolSize = 100
+            };
+
+            _connectionString = builder.ConnectionString;
         }
 
         // -----------------------------
@@ -45,17 +59,23 @@ namespace SmartStudyFunc
                 try
                 {
                     using var conn = new SqlConnection(_connectionString);
+                    conn.StatisticsEnabled = true;
                     await conn.OpenAsync();
 
-                    return await conn.ExecuteScalarAsync<int>(sql, new
-                    {
-                        FileName = name,
-                        FileSizeBytes = sizeBytes,
-                        FileType = fileType,
-                        ClassName = className,
-                        Subject = subject,
-                        Chapter = chapter
-                    });
+                    var result = await conn.ExecuteScalarAsync<int>(
+                        sql, 
+                        new
+                        {
+                            FileName = name,
+                            FileSizeBytes = sizeBytes,
+                            FileType = fileType,
+                            ClassName = className,
+                            Subject = subject,
+                            Chapter = chapter
+                        },
+                        commandTimeout: DefaultCommandTimeout);
+                    
+                    return result;
                 }
                 catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
                 {
@@ -331,6 +351,106 @@ namespace SmartStudyFunc
             // 49918, 49919, 49920: Azure SQL resource issues
             int[] transientErrorNumbers = { -2, -1, 1205, 40197, 40501, 40613, 40540, 40544, 40549, 40550, 40551, 40552, 40553, 49918, 49919, 49920 };
             return transientErrorNumbers.Contains(ex.Number);
+        }
+
+        // -----------------------------
+        // Generic Query Methods for Evaluation Functions
+        // -----------------------------
+
+        /// <summary>
+        /// Execute a query and return multiple rows
+        /// </summary>
+        public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object? param = null)
+        {
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+                    return await conn.QueryAsync<T>(sql, param);
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"QueryAsync failed: {ex.Message}", ex);
+                }
+            }
+
+            throw new InvalidOperationException($"QueryAsync failed after {maxRetries} attempts", lastException);
+        }
+
+        /// <summary>
+        /// Execute a query and return a single row (or default)
+        /// </summary>
+        public async Task<T?> QuerySingleAsync<T>(string sql, object? param = null)
+        {
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+                    return await conn.QuerySingleOrDefaultAsync<T>(sql, param);
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"QuerySingleAsync failed: {ex.Message}", ex);
+                }
+            }
+
+            throw new InvalidOperationException($"QuerySingleAsync failed after {maxRetries} attempts", lastException);
+        }
+
+        /// <summary>
+        /// Execute a command and return scalar value
+        /// </summary>
+        public async Task<T> ExecuteScalarAsync<T>(string sql, object? param = null)
+        {
+            const int maxRetries = 3;
+            const int baseDelayMs = 500;
+            Exception? lastException = null;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    using var conn = new SqlConnection(_connectionString);
+                    await conn.OpenAsync();
+                    return await conn.ExecuteScalarAsync<T>(sql, param);
+                }
+                catch (SqlException ex) when (IsTransientError(ex) && attempt < maxRetries)
+                {
+                    lastException = ex;
+                    int delayMs = baseDelayMs * (int)Math.Pow(2, attempt - 1);
+                    await Task.Delay(delayMs);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"ExecuteScalarAsync failed: {ex.Message}", ex);
+                }
+            }
+
+            throw new InvalidOperationException($"ExecuteScalarAsync failed after {maxRetries} attempts", lastException);
         }
     }
 }

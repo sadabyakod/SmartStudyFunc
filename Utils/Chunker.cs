@@ -25,10 +25,26 @@ namespace SmartStudyFunc.Utils
                 return new List<string>();
             }
 
+            // Safety check for extremely large documents
+            const int MaxTextLength = 10_000_000; // 10MB worth of characters
+            if (text.Length > MaxTextLength)
+            {
+                throw new ArgumentException(
+                    $"Text too large for chunking: {text.Length} characters. Maximum: {MaxTextLength}",
+                    nameof(text));
+            }
+
             var chunks = new List<string>();
 
-            // Remove page break markers for cleaner chunking
-            text = text.Replace("---PAGE_BREAK---", "\n\n");
+            try
+            {
+                // Remove page break markers for cleaner chunking
+                text = text.Replace("---PAGE_BREAK---", "\n\n");
+            }
+            catch (OutOfMemoryException)
+            {
+                throw new InvalidOperationException("Out of memory while processing text. Document may be too large.");
+            }
 
             // Split on double newlines (paragraphs)
             var paragraphs = text.Split(
@@ -94,8 +110,21 @@ namespace SmartStudyFunc.Utils
                 chunks.AddRange(SplitByCharacterLimit(text.Trim()));
             }
 
-            // Filter out very small chunks
-            return chunks.Where(c => c.Length >= MinChunkSize).ToList();
+            // Filter out very small chunks and validate
+            var validChunks = chunks
+                .Where(c => !string.IsNullOrWhiteSpace(c) && c.Length >= MinChunkSize)
+                .Select(c => c.Trim())
+                .ToList();
+
+            // Safety check: prevent excessive chunk count
+            const int MaxChunkCount = 10000;
+            if (validChunks.Count > MaxChunkCount)
+            {
+                throw new InvalidOperationException(
+                    $"Document produced too many chunks: {validChunks.Count}. Maximum: {MaxChunkCount}");
+            }
+
+            return validChunks;
         }
 
         /// <summary>

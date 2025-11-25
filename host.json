@@ -5,7 +5,10 @@
       "samplingSettings": {
         "isEnabled": true,
         "maxTelemetryItemsPerSecond": 20
-      }
+      },
+      "enableLiveMetrics": true,
+      "enableDependencyTracking": true,
+      "enablePerformanceCountersCollection": true
     },
     "logLevel": {
       "default": "Information",
@@ -19,12 +22,17 @@
       "Azure.Storage": "Warning",
       "Azure.Storage.Blobs": "Warning",
       "Azure.Storage.Queues": "Warning",
-      "Host.Triggers.BlobTrigger": "Information"
+      "Host.Triggers.BlobTrigger": "Information",
+      "SmartStudyFunc": "Information"
     }
   },
   "extensions": {
     "http": {
       "routePrefix": "api",
+      "maxConcurrentRequests": 5,
+      "maxOutstandingRequests": 50,
+      "routePrefix": "api",
+      "dynamicThrottlesEnabled": false,
       "customHeaders": {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
@@ -35,12 +43,19 @@
       "maxDegreeOfParallelism": 1
     }
   },
-  "functionTimeout": "00:30:00",
+  "functionTimeout": "00:15:00",
+  "healthMonitor": {
+    "enabled": true,
+    "healthCheckInterval": "00:00:10",
+    "healthCheckWindow": "00:02:00",
+    "healthCheckThreshold": 6,
+    "counterThreshold": 0.80
+  },
   "singleton": {
-    "lockPeriod": "00:00:30",
-    "listenerLockPeriod": "00:01:00",
+    "lockPeriod": "00:00:45",
+    "listenerLockPeriod": "00:01:30",
     "listenerLockRecoveryPollingInterval": "00:01:00",
-    "lockAcquisitionTimeout": "00:02:00",
+    "lockAcquisitionTimeout": "00:03:00",
     "lockAcquisitionPollingInterval": "00:00:05"
   },
   "concurrency": {
@@ -48,8 +63,13 @@
     "maximumFunctionConcurrency": 2
   },
   "retry": {
-    "strategy": "fixedDelay",
-    "maxRetryCount": 2,
-    "delayInterval": "00:00:05"
+    "strategy": "exponentialBackoff",
+    "maxRetryCount": 3,
+    "minimumInterval": "00:00:03",
+    "maximumInterval": "00:01:00"
+  },
+  "aggregator": {
+    "batchSize": 1000,
+    "flushTimeout": "00:00:30"
   }
 }

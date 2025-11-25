@@ -26,18 +26,51 @@ namespace SmartStudyFunc.Helpers
                 throw new ArgumentException("PDF bytes cannot be null or empty", nameof(pdfBytes));
             }
 
+            // Safety check for extremely large PDFs
+            const long MaxPdfSize = 100 * 1024 * 1024; // 100MB
+            if (pdfBytes.Length > MaxPdfSize)
+            {
+                throw new ArgumentException(
+                    $"PDF file too large: {pdfBytes.Length} bytes. Maximum: {MaxPdfSize} bytes",
+                    nameof(pdfBytes));
+            }
+
             try
             {
                 using var pdf = PdfDocument.Open(pdfBytes);
                 var textBuilder = new StringBuilder();
                 int pageCount = pdf.NumberOfPages;
+                int successfulPages = 0;
+                int failedPages = 0;
+
+                // Safety check for excessive page count
+                const int MaxPages = 1000;
+                if (pageCount > MaxPages)
+                {
+                    Console.WriteLine($"Warning: PDF has {pageCount} pages, limiting to first {MaxPages}");
+                    pageCount = MaxPages;
+                }
 
                 for (int pageNumber = 1; pageNumber <= pageCount; pageNumber++)
                 {
                     try
                     {
-                        var page = pdf.GetPage(pageNumber);
-                        var pageText = page.Text;
+                        // Add per-page timeout protection
+                        var pageTask = Task.Run(() => 
+                        {
+                            var page = pdf.GetPage(pageNumber);
+                            return page.Text;
+                        });
+
+                        // 30 second timeout per page
+                        if (!pageTask.Wait(TimeSpan.FromSeconds(30)))
+                        {
+                            Console.WriteLine($"Warning: Timeout extracting page {pageNumber}, skipping...");
+                            failedPages++;
+                            continue;
+                        }
+
+                        var pageText = pageTask.Result;
 
                         if (!string.IsNullOrWhiteSpace(pageText))
                         {
@@ -51,12 +84,15 @@ namespace SmartStudyFunc.Helpers
                                 textBuilder.AppendLine("---PAGE_BREAK---");
                                 textBuilder.AppendLine();
                             }
+                            
+                            successfulPages++;
                         }
                     }
                     catch (Exception pageEx)
                     {
                         // Log and continue to next page if one page fails
                         Console.WriteLine($"Warning: Failed to extract text from page {pageNumber}: {pageEx.Message}");
+                        failedPages++;
                     }
                 }
 
@@ -64,7 +100,14 @@ namespace SmartStudyFunc.Helpers
 
                 if (string.IsNullOrWhiteSpace(extractedText))
                 {
-                    throw new InvalidOperationException("No text could be extracted from the PDF. The PDF may be image-based or empty.");
+                    throw new InvalidOperationException(
+                        $"No text could be extracted from the PDF. The PDF may be image-based or empty. "
+                        + $"Pages processed: {successfulPages}, Failed: {failedPages}");
+                }
+
+                if (failedPages > 0)
+                {
+                    Console.WriteLine($"PDF extraction completed with warnings: {successfulPages} pages successful, {failedPages} pages failed");
                 }
 
                 return extractedText;

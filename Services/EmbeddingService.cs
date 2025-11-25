@@ -157,7 +157,8 @@ namespace SmartStudyFunc.Services
         private async Task<byte[]> CreateRealEmbedding(string text)
         {
             const int maxRetries = 3;
-            const int retryDelayMs = 1000;
+            const int retryDelayMs = 2000; // Increased from 1000ms
+            const int timeoutSeconds = 30; // Per-request timeout
 
             for (int attempt = 1; attempt <= maxRetries; attempt++)
             {
@@ -165,8 +166,11 @@ namespace SmartStudyFunc.Services
                 {
                     _logger.LogDebug("Requesting embedding from Azure OpenAI (attempt {Attempt}/{Max})", attempt, maxRetries);
 
+                    // Add timeout protection for OpenAI calls
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+                    
                     var options = new EmbeddingsOptions(_embeddingDeployment!, new[] { text });
-                    Response<Embeddings> response = await _openAiClient!.GetEmbeddingsAsync(options);
+                    Response<Embeddings> response = await _openAiClient!.GetEmbeddingsAsync(options, cts.Token);
 
                     if (response.Value.Data.Count == 0)
                     {
@@ -184,11 +188,25 @@ namespace SmartStudyFunc.Services
 
                     return byteArray;
                 }
+                catch (OperationCanceledException) when (attempt < maxRetries)
+                {
+                    _logger.LogWarning(
+                        "Timeout on embedding request (attempt {Attempt}/{Max}, timeout: {Timeout}s). Retrying...",
+                        attempt, maxRetries, timeoutSeconds);
+                    await Task.Delay(retryDelayMs * attempt);
+                }
                 catch (RequestFailedException ex) when (IsTransientError(ex) && attempt < maxRetries)
                 {
                     _logger.LogWarning(
-                        "Transient error on embedding request (attempt {Attempt}/{Max}): {Message}",
-                        attempt, maxRetries, ex.Message);
+                        "Transient error on embedding request (attempt {Attempt}/{Max}): Status={Status}, Message={Message}",
+                        attempt, maxRetries, ex.Status, ex.Message);
+                    await Task.Delay(retryDelayMs * attempt);
+                }
+                catch (Exception ex) when (attempt < maxRetries)
+                {
+                    _logger.LogWarning(ex,
+                        "Unexpected error on embedding request (attempt {Attempt}/{Max}). Retrying...",
+                        attempt, maxRetries);
                     await Task.Delay(retryDelayMs * attempt);
                 }
             }

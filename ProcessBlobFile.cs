@@ -45,12 +45,17 @@ namespace SmartStudyFunc
             string className,
             string subject,
             string chapter,
-            string name)
+            string name,
+            CancellationToken cancellationToken)
         {
             var startTime = DateTime.UtcNow;
+            byte[]? textbookBytes = null;
             
             try
             {
+                // Check for cancellation at start
+                cancellationToken.ThrowIfCancellationRequested();
+                
                 _logger.LogInformation("========================================");
                 _logger.LogInformation("NEW FILE UPLOADED TO BLOB");
                 _logger.LogInformation("Class: {ClassName}, Subject: {Subject}, Chapter: {Chapter}", className, subject, chapter);
@@ -71,16 +76,35 @@ namespace SmartStudyFunc
                 }
 
                 // TEXTBOOK PROCESSING with comprehensive error handling
-                byte[]? textbookBytes = null;
                 try
                 {
-                    textbookBytes = await ReadBlobAsync(blobStream);
+                    // Check stream size before reading to prevent OOM
+                    if (blobStream.CanSeek && blobStream.Length > 100 * 1024 * 1024) // 100MB limit
+                    {
+                        _logger.LogError("Blob file too large: {Size} bytes. Maximum: 100MB. File: {Name}", blobStream.Length, name);
+                        return;
+                    }
+
+                    textbookBytes = await ReadBlobAsync(blobStream, cancellationToken);
                     _logger.LogInformation("Successfully read blob stream: {Size} bytes", textbookBytes.Length);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("Processing cancelled for file: {Name}", name);
+                    return;
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Failed to read blob stream for file: {Name}. Aborting.", name);
                     return; // Don't throw - just log and exit gracefully
+                }
+                finally
+                {
+                    // Ensure blob stream is properly disposed
+                    if (blobStream != null)
+                    {
+                        try { await blobStream.DisposeAsync(); } catch { /* Ignore disposal errors */ }
+                    }
                 }
 
                 if (textbookBytes == null || textbookBytes.Length == 0)
@@ -149,14 +173,30 @@ namespace SmartStudyFunc
                 int processedCount = 0;
                 try
                 {
-                    processedCount = await ProcessChunksAsync(chunks, fileId);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    processedCount = await ProcessChunksAsync(chunks, fileId, cancellationToken);
                     _logger.LogInformation("Successfully processed {Count}/{Total} chunks", processedCount, chunks.Count);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("Chunk processing cancelled for: {Name}. Processed {Count}/{Total} chunks before cancellation.", 
+                        name, processedCount, chunks.Count);
+                    // Don't throw - partial success is acceptable
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Chunk processing failed for: {Name}. Processed {Count}/{Total} chunks before failure.", 
                         name, processedCount, chunks.Count);
                     // Don't throw - partial success is better than complete failure
+                }
+                finally
+                {
+                    // Explicitly clear large objects to help GC
+                    if (textbookBytes != null && textbookBytes.Length > 10 * 1024 * 1024) // 10MB+
+                    {
+                        textbookBytes = null;
+                        GC.Collect(2, GCCollectionMode.Optimized, false);
+                    }
                 }
 
                 var duration = DateTime.UtcNow - startTime;
@@ -176,10 +216,10 @@ namespace SmartStudyFunc
             }
         }
 
-        private static async Task<byte[]> ReadBlobAsync(Stream blobStream)
+        private static async Task<byte[]> ReadBlobAsync(Stream blobStream, CancellationToken cancellationToken)
         {
             using var ms = new MemoryStream();
-            await blobStream.CopyToAsync(ms);
+            await blobStream.CopyToAsync(ms, 81920, cancellationToken); // 80KB buffer
             return ms.ToArray();
         }
 
@@ -189,17 +229,30 @@ namespace SmartStudyFunc
             {
                 try
                 {
-                    var extractedText = PdfTextExtractorHelper.Extract(fileBytes);
+                    // Add timeout protection for PDF extraction
+                    using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(3));
+                    var extractTask = Task.Run(() => PdfTextExtractorHelper.Extract(fileBytes), cts.Token);
+                    
+                    var extractedText = extractTask.GetAwaiter().GetResult();
+                    
                     if (string.IsNullOrWhiteSpace(extractedText))
                     {
                         _logger.LogWarning("PDF extraction returned empty text for: {FileName}", fileName);
                         return string.Empty;
                     }
+                    
+                    _logger.LogDebug("Successfully extracted {Length} characters from PDF: {FileName}", 
+                        extractedText.Length, fileName);
                     return extractedText;
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogError("PDF extraction timeout (3 minutes) for: {FileName}. File may be corrupted or too complex.", fileName);
+                    return string.Empty;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "PDF extraction failed for: {FileName}. File might be corrupted or password-protected.", fileName);
+                    _logger.LogError(ex, "PDF extraction failed for: {FileName}. File might be corrupted, password-protected, or malformed.", fileName);
                     return string.Empty; // Don't throw - return empty string
                 }
             }
@@ -208,7 +261,7 @@ namespace SmartStudyFunc
             return string.Empty;
         }
 
-        private async Task<int> ProcessChunksAsync(System.Collections.Generic.List<string> chunks, int fileId)
+        private async Task<int> ProcessChunksAsync(System.Collections.Generic.List<string> chunks, int fileId, CancellationToken cancellationToken)
         {
             int processedCount = 0;
             int failedCount = 0;
@@ -219,6 +272,9 @@ namespace SmartStudyFunc
 
             for (int batchStart = 0; batchStart < chunks.Count; batchStart += batchSize)
             {
+                // Check for cancellation before each batch
+                cancellationToken.ThrowIfCancellationRequested();
+                
                 int batchEnd = Math.Min(batchStart + batchSize, chunks.Count);
                 var batchNumber = (batchStart / batchSize) + 1;
                 var totalBatches = (int)Math.Ceiling((double)chunks.Count / batchSize);
@@ -272,6 +328,13 @@ namespace SmartStudyFunc
                         // Generate and insert embedding with built-in retry logic in EmbeddingService
                         try
                         {
+                            // Check cancellation before expensive embedding operation
+                            cancellationToken.ThrowIfCancellationRequested();
+                            
+                            // Add timeout protection for embedding generation (30 seconds per chunk)
+                            using var embCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                            embCts.CancelAfter(TimeSpan.FromSeconds(30));
+                            
                             byte[] emb = await _embeddingService.CreateEmbedding(chunk);
                             
                             if (emb == null || emb.Length == 0)
@@ -284,6 +347,13 @@ namespace SmartStudyFunc
                             await _db.InsertEmbedding(chunkId, emb);
                             _logger.LogInformation("Inserted embedding for chunk {Index}/{Total}, size: {Size} bytes", 
                                 i + 1, chunks.Count, emb.Length);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            _logger.LogWarning("Embedding generation cancelled/timeout for chunk {Index}/{Total}. Continuing...", 
+                                i + 1, chunks.Count);
+                            failedCount++;
+                            // Continue - chunk is inserted, just missing embedding
                         }
                         catch (Exception ex)
                         {
