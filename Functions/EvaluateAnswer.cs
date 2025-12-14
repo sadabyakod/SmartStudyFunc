@@ -26,10 +26,15 @@ namespace SmartStudyFunc.Functions
             ILogger<EvaluateAnswer> logger,
             AiScoringService scoringService)
         {
-            _logger = logger;
-            _scoringService = scoringService;
-            _connectionString = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING")
-                ?? throw new InvalidOperationException("SQL_CONNECTION_STRING environment variable is not set");
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _scoringService = scoringService ?? throw new ArgumentNullException(nameof(scoringService));
+            
+            _connectionString = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING") 
+                ?? Environment.GetEnvironmentVariable("SqlConnectionString")
+                ?? Environment.GetEnvironmentVariable("ConnectionStrings__SqlDb")
+                ?? throw new InvalidOperationException("No SQL connection string found in environment variables");
+            
+            _logger.LogInformation("EvaluateAnswer constructor initialized successfully");
         }
 
         [Function("EvaluateAnswer")]
@@ -38,6 +43,19 @@ namespace SmartStudyFunc.Functions
             CancellationToken ct)
         {
             _logger.LogInformation("EvaluateAnswer function triggered");
+
+            // Check if services are initialized
+            if (_scoringService == null)
+            {
+                _logger.LogError("AiScoringService is null");
+                return new ObjectResult(new { Error = "Service initialization failed", Details = "_scoringService is null" }) { StatusCode = 500 };
+            }
+
+            if (string.IsNullOrEmpty(_connectionString))
+            {
+                _logger.LogError("Connection string is null or empty");
+                return new ObjectResult(new { Error = "Configuration error", Details = "Connection string not set" }) { StatusCode = 500 };
+            }
 
             try
             {
@@ -64,14 +82,14 @@ namespace SmartStudyFunc.Functions
                 }
 
                 // Validate required fields
-                if (request.ExamId <= 0)
+                if (string.IsNullOrWhiteSpace(request.ExamId))
                 {
-                    return new BadRequestObjectResult(new { Error = "ExamId must be a positive integer" });
+                    return new BadRequestObjectResult(new { Error = "ExamId is required" });
                 }
 
-                if (request.QuestionId <= 0)
+                if (request.QuestionId == Guid.Empty)
                 {
-                    return new BadRequestObjectResult(new { Error = "QuestionId must be a positive integer" });
+                    return new BadRequestObjectResult(new { Error = "QuestionId is required and must be a valid GUID" });
                 }
 
                 if (string.IsNullOrWhiteSpace(request.StudentAnswerText))
@@ -85,18 +103,26 @@ namespace SmartStudyFunc.Functions
                 // Load question details from database
                 var questionQuery = @"
                     SELECT 
-                        IdealAnswer,
-                        Marks,
+                        ModelAnswer as IdealAnswer,
+                        MaxScore as Marks,
                         Keywords
-                    FROM GeneratedQuestions
+                    FROM ExamQuestions
                     WHERE Id = @QuestionId";
 
                 dynamic? questionData;
-                using (var conn = new SqlConnection(_connectionString))
+                try
                 {
-                    await conn.OpenAsync(ct);
-                    questionData = (await conn.QueryAsync<dynamic>(questionQuery, new { QuestionId = request.QuestionId }))
-                        .FirstOrDefault();
+                    using (var conn = new SqlConnection(_connectionString))
+                    {
+                        await conn.OpenAsync(ct);
+                        questionData = (await conn.QueryAsync<dynamic>(questionQuery, new { QuestionId = request.QuestionId }))
+                            .FirstOrDefault();
+                    }
+                }
+                catch (Exception dbEx)
+                {
+                    _logger.LogError(dbEx, "Database query failed for QuestionId={QuestionId}", request.QuestionId);
+                    return new ObjectResult(new { Error = "Database query failed", Details = dbEx.Message }) { StatusCode = 500 };
                 }
 
                 if (questionData == null)
@@ -107,7 +133,7 @@ namespace SmartStudyFunc.Functions
                     });
                 }
                 var idealAnswer = (string)questionData.IdealAnswer ?? string.Empty;
-                var maxMarks = (int)questionData.Marks;
+                var maxMarks = (int)(decimal)questionData.Marks;
                 var keywordsJson = (string)questionData.Keywords ?? "[]";
                 var keywords = JsonConvert.DeserializeObject<string[]>(keywordsJson) ?? Array.Empty<string>();
 
@@ -115,55 +141,96 @@ namespace SmartStudyFunc.Functions
                     maxMarks, keywords.Length);
 
                 // Call AI scoring service
-                var scoringResult = await _scoringService.ScoreAsync(
-                    request.StudentAnswerText,
-                    idealAnswer,
-                    maxMarks,
-                    keywords,
-                    ct);
+                ScoringResult scoringResult;
+                try
+                {
+                    scoringResult = await _scoringService.ScoreAsync(
+                        request.StudentAnswerText,
+                        idealAnswer,
+                        maxMarks,
+                        keywords,
+                        ct);
+                }
+                catch (Exception aiEx)
+                {
+                    _logger.LogError(aiEx, "AI scoring failed for QuestionId={QuestionId}", request.QuestionId);
+                    return new ObjectResult(new { Error = "AI scoring failed", Details = aiEx.Message }) { StatusCode = 500 };
+                }
 
                 _logger.LogInformation("AI scoring complete: Score={Score}/{MaxMarks}, UsedFallback={Fallback}",
                     scoringResult.Score, scoringResult.MaxMarks, scoringResult.UsedFallback);
 
-                // Save evaluation to database
+                // Save evaluation to database using WrittenQuestionEvaluations table
                 var insertQuery = @"
-                    INSERT INTO EvaluatedAnswers (
-                        ExamId, QuestionId, StudentAnswer, ExtractedText, IdealAnswer,
-                        Score, MaxMarks, Feedback, KeywordsMatched, MissingKeywords,
-                        Strengths, ImprovementSuggestions, BlobPath, EvaluatedOn
+                    INSERT INTO WrittenQuestionEvaluations (
+                        Id, WrittenSubmissionId, QuestionId, QuestionNumber, 
+                        ExtractedAnswer, ModelAnswer, MaxScore, AwardedScore, 
+                        Feedback, RubricBreakdown, EvaluatedAt
                     )
                     VALUES (
-                        @ExamId, @QuestionId, @StudentAnswer, @ExtractedText, @IdealAnswer,
-                        @Score, @MaxMarks, @Feedback, @KeywordsMatched, @MissingKeywords,
-                        @Strengths, @ImprovementSuggestions, @BlobPath, GETUTCDATE()
+                        NEWID(), @WrittenSubmissionId, @QuestionId, @QuestionNumber,
+                        @ExtractedAnswer, @ModelAnswer, @MaxScore, @AwardedScore,
+                        @Feedback, @RubricBreakdown, GETUTCDATE()
                     );
-                    SELECT CAST(SCOPE_IDENTITY() AS INT);";
+                    SELECT CAST(@@ROWCOUNT AS INT);";
 
                 int evaluationId;
                 using (var conn = new SqlConnection(_connectionString))
                 {
                     await conn.OpenAsync(ct);
+                    
+                    // Create rubric breakdown JSON
+                    var rubricBreakdown = JsonConvert.SerializeObject(new
+                    {
+                        KeywordsMatched = scoringResult.KeywordsMatched,
+                        MissingKeywords = scoringResult.MissingKeywords,
+                        Strengths = scoringResult.Strengths,
+                        ImprovementSuggestion = scoringResult.ImprovementSuggestion
+                    });
+                    
                     evaluationId = await conn.ExecuteScalarAsync<int>(
                         insertQuery,
                         new
                         {
-                            request.ExamId,
-                            request.QuestionId,
-                            StudentAnswer = request.StudentAnswerText,
-                            request.ExtractedText,
-                            IdealAnswer = idealAnswer,
-                            scoringResult.Score,
-                            scoringResult.MaxMarks,
-                            scoringResult.Feedback,
-                            KeywordsMatched = JsonConvert.SerializeObject(scoringResult.KeywordsMatched),
-                            MissingKeywords = JsonConvert.SerializeObject(scoringResult.MissingKeywords),
-                            Strengths = JsonConvert.SerializeObject(scoringResult.Strengths),
-                            ImprovementSuggestions = scoringResult.ImprovementSuggestion,
-                            request.BlobPath
+                            WrittenSubmissionId = request.WrittenSubmissionId ?? Guid.NewGuid(), // Generate new GUID if not provided
+                            QuestionId = request.QuestionId,
+                            QuestionNumber = 1, // Would come from actual question
+                            ExtractedAnswer = request.StudentAnswerText,
+                            ModelAnswer = idealAnswer,
+                            MaxScore = (decimal)scoringResult.MaxMarks,
+                            AwardedScore = (decimal)scoringResult.Score,
+                            Feedback = scoringResult.Feedback,
+                            RubricBreakdown = rubricBreakdown
                         });
+                    
+                    // Update WrittenSubmissions status if WrittenSubmissionId was provided
+                    if (request.WrittenSubmissionId.HasValue && request.WrittenSubmissionId.Value != Guid.Empty)
+                    {
+                        var updateStatusQuery = @"
+                            UPDATE WrittenSubmissions 
+                            SET Status = 3,  -- 3 = Completed
+                                TotalScore = ISNULL(TotalScore, 0) + @AwardedScore,
+                                MaxPossibleScore = ISNULL(MaxPossibleScore, 0) + @MaxScore,
+                                Percentage = CASE 
+                                    WHEN (ISNULL(MaxPossibleScore, 0) + @MaxScore) > 0 
+                                    THEN ((ISNULL(TotalScore, 0) + @AwardedScore) / (ISNULL(MaxPossibleScore, 0) + @MaxScore)) * 100 
+                                    ELSE 0 
+                                END,
+                                EvaluatedAt = GETUTCDATE()
+                            WHERE Id = @WrittenSubmissionId";
+                        
+                        await conn.ExecuteAsync(updateStatusQuery, new
+                        {
+                            WrittenSubmissionId = request.WrittenSubmissionId.Value,
+                            AwardedScore = (decimal)scoringResult.Score,
+                            MaxScore = (decimal)scoringResult.MaxMarks
+                        });
+                        
+                        _logger.LogInformation("WrittenSubmission {SubmissionId} status updated to Completed", request.WrittenSubmissionId.Value);
+                    }
                 }
 
-                _logger.LogInformation("Evaluation saved with Id={EvaluationId}", evaluationId);
+                _logger.LogInformation("Evaluation saved successfully, RowCount={EvaluationId}", evaluationId);
 
                 // Build response
                 var percentage = Math.Round((scoringResult.Score / scoringResult.MaxMarks) * 100, 1);
@@ -195,7 +262,7 @@ namespace SmartStudyFunc.Functions
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Evaluation failed");
-                return new ObjectResult(new { Error = "Evaluation processing failed", Details = ex.Message })
+                return new ObjectResult(new { Error = "Evaluation processing failed", Details = ex.ToString() })
                 {
                     StatusCode = 500
                 };

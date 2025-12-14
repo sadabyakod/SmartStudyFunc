@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
+using Microsoft.Data.SqlClient;
+using Dapper;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -15,14 +17,14 @@ namespace SmartStudyFunc.Functions
     public class GetEvaluationResults
     {
         private readonly ILogger<GetEvaluationResults> _logger;
-        private readonly SqlDb _sqlDb;
+        private readonly string _connectionString;
 
         public GetEvaluationResults(ILogger<GetEvaluationResults> logger)
         {
             _logger = logger;
-            var connectionString = Environment.GetEnvironmentVariable("SqlConnectionString")
-                ?? throw new InvalidOperationException("SqlConnectionString not configured");
-            _sqlDb = new SqlDb(connectionString);
+            _connectionString = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING")
+                ?? Environment.GetEnvironmentVariable("SqlConnectionString")
+                ?? throw new InvalidOperationException("SQL connection string not configured");
         }
 
         /// <summary>
@@ -32,30 +34,31 @@ namespace SmartStudyFunc.Functions
         [Function("GetEvaluationsByExam")]
         public async Task<IActionResult> GetByExam(
             [HttpTrigger(AuthorizationLevel.Function, "get", Route = "evaluations/exam/{examId}")] HttpRequest req,
-            int examId)
+            string examId)
         {
-            _logger.LogInformation($"Fetching evaluations for exam: {examId}");
+            _logger.LogInformation("Fetching evaluations for exam: {ExamId}", examId);
 
             try
             {
                 var query = @"
                     SELECT 
                         e.Id,
-                        e.ExamId,
+                        q.ExamId,
                         e.QuestionId,
-                        q.Question AS QuestionText,
-                        e.Score,
-                        e.MaxMarks,
+                        q.QuestionText,
+                        e.AwardedScore as Score,
+                        e.MaxScore as MaxMarks,
                         e.Feedback,
-                        e.KeywordsMatched,
-                        e.MissingKeywords,
-                        e.CreatedOn
-                    FROM EvaluatedAnswers e
-                    INNER JOIN GeneratedQuestions q ON e.QuestionId = q.Id
-                    WHERE e.ExamId = @ExamId
-                    ORDER BY e.CreatedOn DESC";
+                        e.RubricBreakdown,
+                        e.EvaluatedAt as CreatedOn
+                    FROM WrittenQuestionEvaluations e
+                    INNER JOIN ExamQuestions q ON e.QuestionId = q.Id
+                    WHERE q.ExamId = @ExamId
+                    ORDER BY e.EvaluatedAt DESC";
 
-                var results = await _sqlDb.QueryAsync<dynamic>(query, new { ExamId = examId });
+                using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                var results = (await conn.QueryAsync<dynamic>(query, new { ExamId = examId })).ToList();
 
                 if (!results.Any())
                 {
@@ -66,15 +69,15 @@ namespace SmartStudyFunc.Functions
                 }
 
                 // Calculate aggregate stats
-                var totalScore = results.Sum(r => (double)r.Score);
-                var totalMarks = results.Sum(r => (int)r.MaxMarks);
+                var totalScore = results.Sum(r => (double)(decimal)r.Score);
+                var totalMarks = results.Sum(r => (double)(decimal)r.MaxMarks);
                 var percentage = totalMarks > 0 ? Math.Round((totalScore / totalMarks) * 100, 2) : 0;
 
                 return new OkObjectResult(new
                 {
                     success = true,
                     examId,
-                    totalQuestions = results.Count(),
+                    totalQuestions = results.Count,
                     totalScore,
                     totalMarks,
                     percentage,
@@ -83,7 +86,7 @@ namespace SmartStudyFunc.Functions
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error fetching evaluations: {ex.Message}");
+                _logger.LogError(ex, "Error fetching evaluations for exam {ExamId}", examId);
                 return new ObjectResult(new { error = ex.Message }) { StatusCode = 500 };
             }
         }
@@ -95,39 +98,36 @@ namespace SmartStudyFunc.Functions
         [Function("GetEvaluationByQuestion")]
         public async Task<IActionResult> GetByQuestion(
             [HttpTrigger(AuthorizationLevel.Function, "get", Route = "evaluations/exam/{examId}/question/{questionId}")] HttpRequest req,
-            int examId,
-            int questionId)
+            string examId,
+            string questionId)
         {
-            _logger.LogInformation($"Fetching evaluation: ExamId={examId}, QuestionId={questionId}");
+            _logger.LogInformation("Fetching evaluation: ExamId={ExamId}, QuestionId={QuestionId}", examId, questionId);
 
             try
             {
                 var query = @"
                     SELECT 
                         e.Id,
-                        e.ExamId,
+                        q.ExamId,
                         e.QuestionId,
-                        q.Question AS QuestionText,
-                        e.StudentAnswer,
-                        e.ExtractedText,
-                        e.IdealAnswer,
-                        e.Score,
-                        e.MaxMarks,
+                        q.QuestionText,
+                        e.ExtractedAnswer as StudentAnswer,
+                        e.ModelAnswer as IdealAnswer,
+                        e.AwardedScore as Score,
+                        e.MaxScore as MaxMarks,
                         e.Feedback,
-                        e.Strengths,
-                        e.ImprovementSuggestions,
-                        e.KeywordsMatched,
-                        e.MissingKeywords,
-                        e.ImageBlobPath,
-                        e.CreatedOn
-                    FROM EvaluatedAnswers e
-                    INNER JOIN GeneratedQuestions q ON e.QuestionId = q.Id
-                    WHERE e.ExamId = @ExamId AND e.QuestionId = @QuestionId
-                    ORDER BY e.CreatedOn DESC";
+                        e.RubricBreakdown,
+                        e.EvaluatedAt as CreatedOn
+                    FROM WrittenQuestionEvaluations e
+                    INNER JOIN ExamQuestions q ON e.QuestionId = q.Id
+                    WHERE q.ExamId = @ExamId AND e.QuestionId = @QuestionId
+                    ORDER BY e.EvaluatedAt DESC";
 
-                var result = await _sqlDb.QuerySingleAsync<dynamic>(
+                using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                var result = await conn.QueryFirstOrDefaultAsync<dynamic>(
                     query,
-                    new { ExamId = examId, QuestionId = questionId }
+                    new { ExamId = examId, QuestionId = Guid.Parse(questionId) }
                 );
 
                 if (result == null)
@@ -146,7 +146,7 @@ namespace SmartStudyFunc.Functions
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error fetching evaluation: {ex.Message}");
+                _logger.LogError(ex, "Error fetching evaluation: {Message}", ex.Message);
                 return new ObjectResult(new { error = ex.Message }) { StatusCode = 500 };
             }
         }
@@ -158,21 +158,32 @@ namespace SmartStudyFunc.Functions
         [Function("GetEvaluationById")]
         public async Task<IActionResult> GetById(
             [HttpTrigger(AuthorizationLevel.Function, "get", Route = "evaluations/{id}")] HttpRequest req,
-            int id)
+            string id)
         {
-            _logger.LogInformation($"Fetching evaluation by ID: {id}");
+            _logger.LogInformation("Fetching evaluation by ID: {Id}", id);
 
             try
             {
                 var query = @"
                     SELECT 
-                        e.*,
-                        q.Question AS QuestionText
-                    FROM EvaluatedAnswers e
-                    INNER JOIN GeneratedQuestions q ON e.QuestionId = q.Id
+                        e.Id,
+                        q.ExamId,
+                        e.QuestionId,
+                        q.QuestionText,
+                        e.ExtractedAnswer as StudentAnswer,
+                        e.ModelAnswer as IdealAnswer,
+                        e.AwardedScore as Score,
+                        e.MaxScore as MaxMarks,
+                        e.Feedback,
+                        e.RubricBreakdown,
+                        e.EvaluatedAt as CreatedOn
+                    FROM WrittenQuestionEvaluations e
+                    INNER JOIN ExamQuestions q ON e.QuestionId = q.Id
                     WHERE e.Id = @Id";
 
-                var result = await _sqlDb.QuerySingleAsync<dynamic>(query, new { Id = id });
+                using var conn = new SqlConnection(_connectionString);
+                await conn.OpenAsync();
+                var result = await conn.QueryFirstOrDefaultAsync<dynamic>(query, new { Id = Guid.Parse(id) });
 
                 if (result == null)
                 {
@@ -187,7 +198,7 @@ namespace SmartStudyFunc.Functions
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error fetching evaluation: {ex.Message}");
+                _logger.LogError(ex, "Error fetching evaluation by ID: {Message}", ex.Message);
                 return new ObjectResult(new { error = ex.Message }) { StatusCode = 500 };
             }
         }

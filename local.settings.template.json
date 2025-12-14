@@ -1,15 +1,34 @@
 {
   "IsEncrypted": false,
   "Values": {
-    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=YOUR_STORAGE_ACCOUNT;AccountKey=YOUR_KEY;EndpointSuffix=core.windows.net",
     "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "FUNCTIONS_EXTENSION_VERSION": "~4",
+    "WEBSITE_RUN_FROM_PACKAGE": "1",
     "USE_REAL_EMBEDDINGS": "true",
+    
     "AzureOpenAI:Endpoint": "https://YOUR-RESOURCE.openai.azure.com/",
-    "AzureOpenAI:ApiKey": "PASTE-YOUR-KEY-HERE",
-    "AzureOpenAI:EmbeddingDeployment": "text-embedding-3-large",
-    "AzureOpenAI:ChatDeployment": "gpt-4o-mini"
+    "AzureOpenAI:ApiKey": "YOUR-AZURE-OPENAI-KEY",
+    "AzureOpenAI:DeploymentName": "gpt-4o-mini",
+    "AzureOpenAI:EmbeddingDeployment": "text-embedding-3-small",
+    "AzureOpenAI:ChatDeployment": "gpt-4o-mini",
+    
+    "SqlConnectionString": "Server=tcp:your-server.database.windows.net,1433;Initial Catalog=your-db;User ID=your-user;Password=your-password;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;",
+    
+    "GOOGLE_APPLICATION_CREDENTIALS": "path/to/your/google-credentials.json",
+    
+    "WrittenSubmission:RetentionDays": "30",
+    
+    "AZURE_FUNCTION_APP_NAME": "smartstudy-func",
+    "AZURE_RESOURCE_GROUP": "rg-smartstudy-dev",
+    "AZURE_SUBSCRIPTION_ID": "64cf6114-e23f-4507-ba2f-7bf5b133a9fe",
+    "AZURE_FUNCTION_URL": "https://smartstudy-func-bgdre2hwded4cmg6.centralindia-01.azurewebsites.net"
   },
   "ConnectionStrings": {
     "SqlDb": "Server=tcp:your-server.database.windows.net,1433;Initial Catalog=your-db;User ID=your-user;Password=your-password;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+  },
+  "Host": {
+    "CORS": "*",
+    "CORSCredentials": false
   }
 }

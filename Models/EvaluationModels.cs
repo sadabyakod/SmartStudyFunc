@@ -23,11 +23,12 @@ namespace SmartStudyFunc.Models
     /// </summary>
     public class EvaluateAnswerRequest
     {
-        public int ExamId { get; set; }
-        public int QuestionId { get; set; }
+        public string ExamId { get; set; } = string.Empty;
+        public Guid QuestionId { get; set; }
         public string StudentAnswerText { get; set; } = string.Empty;
         public string? ExtractedText { get; set; }
         public string? BlobPath { get; set; }
+        public Guid? WrittenSubmissionId { get; set; }
     }
 
     /// <summary>
@@ -37,8 +38,8 @@ namespace SmartStudyFunc.Models
     {
         public bool Success { get; set; }
         public int EvaluationId { get; set; }
-        public int ExamId { get; set; }
-        public int QuestionId { get; set; }
+        public string ExamId { get; set; } = string.Empty;
+        public Guid QuestionId { get; set; }
         public double Score { get; set; }
         public int MaxMarks { get; set; }
         public double Percentage { get; set; }

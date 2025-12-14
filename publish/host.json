@@ -1,0 +1,75 @@
+{
+  "version": "2.0",
+  "logging": {
+    "applicationInsights": {
+      "samplingSettings": {
+        "isEnabled": true,
+        "maxTelemetryItemsPerSecond": 20
+      },
+      "enableLiveMetrics": true,
+      "enableDependencyTracking": true,
+      "enablePerformanceCountersCollection": true
+    },
+    "logLevel": {
+      "default": "Information",
+      "Host": "Information",
+      "Function": "Information",
+      "Host.Results": "Information",
+      "Host.Aggregator": "Information",
+      "Microsoft": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information",
+      "Azure.Core": "Warning",
+      "Azure.Storage": "Warning",
+      "Azure.Storage.Blobs": "Warning",
+      "Azure.Storage.Queues": "Warning",
+      "Host.Triggers.BlobTrigger": "Information",
+      "SmartStudyFunc": "Information"
+    }
+  },
+  "extensions": {
+    "http": {
+      "routePrefix": "api",
+      "maxConcurrentRequests": 5,
+      "maxOutstandingRequests": 50,
+      "routePrefix": "api",
+      "dynamicThrottlesEnabled": false,
+      "customHeaders": {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization"
+      }
+    },
+    "blobs": {
+      "maxDegreeOfParallelism": 1
+    }
+  },
+  "functionTimeout": "00:15:00",
+  "healthMonitor": {
+    "enabled": true,
+    "healthCheckInterval": "00:00:10",
+    "healthCheckWindow": "00:02:00",
+    "healthCheckThreshold": 6,
+    "counterThreshold": 0.80
+  },
+  "singleton": {
+    "lockPeriod": "00:00:45",
+    "listenerLockPeriod": "00:01:30",
+    "listenerLockRecoveryPollingInterval": "00:01:00",
+    "lockAcquisitionTimeout": "00:03:00",
+    "lockAcquisitionPollingInterval": "00:00:05"
+  },
+  "concurrency": {
+    "dynamicConcurrencyEnabled": false,
+    "maximumFunctionConcurrency": 2
+  },
+  "retry": {
+    "strategy": "exponentialBackoff",
+    "maxRetryCount": 3,
+    "minimumInterval": "00:00:03",
+    "maximumInterval": "00:01:00"
+  },
+  "aggregator": {
+    "batchSize": 1000,
+    "flushTimeout": "00:00:30"
+  }
+}
