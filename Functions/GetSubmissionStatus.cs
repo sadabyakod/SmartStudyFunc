@@ -84,7 +84,8 @@ namespace SmartStudyFunc.Functions
                     OcrCompletedAt,
                     EvaluationStartedAt,
                     EvaluatedAt,
-                    RetryCount
+                    RetryCount,
+                    EvaluationResultBlobPath
                 FROM WrittenSubmissions
                 WHERE Id = @Id";
 
@@ -127,6 +128,7 @@ namespace SmartStudyFunc.Functions
                     evaluationStartedAt = reader.IsDBNull(12) ? null : (DateTime?)reader.GetDateTime(12),
                     evaluatedAt = reader.IsDBNull(13) ? null : (DateTime?)reader.GetDateTime(13),
                     retryCount = reader.GetInt32(14),
+                    evaluationResultBlobPath = reader.IsDBNull(15) ? null : reader.GetString(15),
                     isComplete = status == 3,
                     isFailed = status == 4,
                     isProcessing = status >= 0 && status <= 2

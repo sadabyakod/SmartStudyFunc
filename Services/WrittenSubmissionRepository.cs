@@ -205,13 +205,22 @@ namespace SmartStudyFunc.Services
             long? processingTimeMs = null,
             CancellationToken cancellationToken = default)
         {
+            // CRITICAL: EvaluationResultBlobPath MUST be set when marking as Completed
+            // This ensures mobile app always gets the blob path for completed submissions
+            if (string.IsNullOrEmpty(resultBlobPath))
+            {
+                throw new ArgumentException(
+                    $"EvaluationResultBlobPath is required when saving evaluation result. SubmissionId: {result.WrittenSubmissionId}",
+                    nameof(resultBlobPath));
+            }
+
             await using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync(cancellationToken);
             await using var transaction = connection.BeginTransaction();
 
             try
             {
-                // Update submission with final scores and result blob path
+                // Update submission with final scores and result blob path (Status + BlobPath updated atomically)
                 const string updateSubmissionSql = @"
                     UPDATE WrittenSubmissions
                     SET Status = @Status,
@@ -233,7 +242,7 @@ namespace SmartStudyFunc.Services
                     cmd.Parameters.AddWithValue("@MaxPossibleScore", result.MaxPossibleScore);
                     cmd.Parameters.AddWithValue("@Percentage", result.Percentage);
                     cmd.Parameters.AddWithValue("@Grade", CalculateGrade(result.Percentage));
-                    cmd.Parameters.AddWithValue("@ResultBlobPath", (object?)resultBlobPath ?? DBNull.Value);
+                    cmd.Parameters.AddWithValue("@ResultBlobPath", resultBlobPath); // Required - validated above
                     cmd.Parameters.AddWithValue("@ProcessingTimeMs", (object?)processingTimeMs ?? DBNull.Value);
                     
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
@@ -271,8 +280,8 @@ namespace SmartStudyFunc.Services
                 await transaction.CommitAsync(cancellationToken);
 
                 _logger.LogInformation(
-                    "[{SubmissionId}] Evaluation results saved: {Score}/{MaxScore}",
-                    result.WrittenSubmissionId, result.TotalScore, result.MaxPossibleScore);
+                    "[{SubmissionId}] Evaluation results saved atomically: Status=Completed, BlobPath={BlobPath}, Score={Score}/{MaxScore}",
+                    result.WrittenSubmissionId, resultBlobPath, result.TotalScore, result.MaxPossibleScore);
             }
             catch
             {

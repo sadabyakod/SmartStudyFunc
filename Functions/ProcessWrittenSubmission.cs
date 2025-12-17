@@ -298,30 +298,57 @@ namespace SmartStudyFunc.Functions
                 evalStopwatch.Stop();
 
                 // ════════════════════════════════════════════════════════════════
-                // PHASE 5: Save Results to Blob Storage (Permanent Storage)
+                // PHASE 5: Save Results to Blob Storage (Required for Completion)
                 // ════════════════════════════════════════════════════════════════
                 string? resultBlobPath = null;
-                try
+                int blobRetryCount = 0;
+                const int maxBlobRetries = 3;
+                
+                while (resultBlobPath == null && blobRetryCount < maxBlobRetries)
                 {
-                    resultBlobPath = await SaveEvaluationResultToBlobAsync(
-                        submissionId,
-                        examId,
-                        evaluationResult,
-                        cancellationToken);
-                    
-                    _logger.LogInformation(
-                        "[RESULT_SAVED_TO_BLOB] SubmissionId={SubmissionId}, BlobPath={BlobPath}",
-                        submissionId, resultBlobPath);
+                    try
+                    {
+                        resultBlobPath = await SaveEvaluationResultToBlobAsync(
+                            submissionId,
+                            examId,
+                            evaluationResult,
+                            cancellationToken);
+                        
+                        _logger.LogInformation(
+                            "[RESULT_SAVED_TO_BLOB] SubmissionId={SubmissionId}, BlobPath={BlobPath}",
+                            submissionId, resultBlobPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        blobRetryCount++;
+                        _logger.LogWarning(ex,
+                            "[RESULT_BLOB_SAVE_FAILED] SubmissionId={SubmissionId}, Attempt={Attempt}/{MaxAttempts}",
+                            submissionId, blobRetryCount, maxBlobRetries);
+                        
+                        if (blobRetryCount < maxBlobRetries)
+                        {
+                            await Task.Delay(1000 * blobRetryCount, cancellationToken); // Exponential backoff
+                        }
+                    }
                 }
-                catch (Exception ex)
+
+                // Only mark as Completed if blob save succeeded
+                if (string.IsNullOrEmpty(resultBlobPath))
                 {
-                    _logger.LogWarning(ex,
-                        "[RESULT_BLOB_SAVE_FAILED] SubmissionId={SubmissionId}. Continuing with database save.",
+                    _logger.LogError(
+                        "[BLOB_SAVE_FAILED_FINAL] SubmissionId={SubmissionId}. Cannot complete without blob storage.",
                         submissionId);
+                    
+                    await _repository.UpdateStatusAsync(
+                        submissionId,
+                        WrittenSubmissionStatus.Failed,
+                        "Failed to save evaluation results to blob storage after retries",
+                        cancellationToken);
+                    return;
                 }
 
                 // ════════════════════════════════════════════════════════════════
-                // PHASE 6: Save Results to Database and Update Status
+                // PHASE 6: Save Results to Database and Update Status to Completed
                 // ════════════════════════════════════════════════════════════════
                 await _repository.SaveEvaluationResultAsync(
                     evaluationResult,
