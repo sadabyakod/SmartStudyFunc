@@ -137,15 +137,32 @@ Respond ONLY with valid JSON, no markdown, no explanations."),
                         MissingPoints = parsed.MissingPoints ?? new List<string>(),
                         Strengths = parsed.Strengths ?? new List<string>(),
                         ImprovementSuggestion = parsed.Improvement ?? "Keep practicing",
-                        UsedFallback = false
+                        UsedFallback = false,
+                        IsComplete = parsed.IsComplete,
+                        CompletionStatus = parsed.CompletionStatus ?? (parsed.IsComplete ? "Complete" : "Incomplete")
                     };
+
+                    // Parse step-wise breakdown
+                    if (parsed.StepWiseBreakdown != null && parsed.StepWiseBreakdown.Any())
+                    {
+                        result.StepWiseBreakdown = parsed.StepWiseBreakdown.Select(s => new StepWiseMarks
+                        {
+                            StepNumber = s.StepNumber,
+                            StepDescription = s.StepDescription,
+                            MaxMarks = s.MaxMarks,
+                            MarksAwarded = s.MarksAwarded,
+                            Status = s.Status,
+                            Feedback = s.Feedback
+                        }).ToList();
+                    }
 
                     // Add keyword analysis
                     var keywordAnalysis = AnalyzeKeywords(studentText, keywords);
                     result.KeywordsMatched = keywordAnalysis.Matched;
                     result.MissingKeywords = keywordAnalysis.Missing;
 
-                    _logger.LogInformation("AI scoring complete. Score: {Score}/{MaxMarks}", result.Score, maxMarks);
+                    _logger.LogInformation("AI scoring complete. Score: {Score}/{MaxMarks}, Complete: {IsComplete}, Steps: {StepCount}", 
+                        result.Score, maxMarks, result.IsComplete, result.StepWiseBreakdown.Count);
 
                     return result;
                 }
@@ -202,6 +219,29 @@ Respond ONLY with valid JSON, no markdown, no explanations."),
             // Combine factors
             double finalScore = Math.Round(maxMarks * keywordScore * (0.7 + 0.3 * lengthFactor), 1);
 
+            // Determine completion status
+            bool isComplete = keywordScore >= 0.8 && lengthFactor >= 0.7;
+            string completionStatus = keywordScore >= 0.8 ? "Complete" : (keywordScore >= 0.4 ? "Partial" : "Incomplete");
+
+            // Generate step-wise breakdown based on keywords
+            var stepWiseBreakdown = new List<StepWiseMarks>();
+            double marksPerKeyword = keywords.Count > 0 ? (double)maxMarks / keywords.Count : maxMarks;
+            int stepNum = 1;
+            
+            foreach (var keyword in keywords)
+            {
+                bool matched = keywordAnalysis.Matched.Contains(keyword);
+                stepWiseBreakdown.Add(new StepWiseMarks
+                {
+                    StepNumber = stepNum++,
+                    StepDescription = $"Concept: {keyword}",
+                    MaxMarks = Math.Round(marksPerKeyword, 1),
+                    MarksAwarded = matched ? Math.Round(marksPerKeyword, 1) : 0,
+                    Status = matched ? "Complete" : "Missing",
+                    Feedback = matched ? $"'{keyword}' concept covered" : $"'{keyword}' concept not found in answer"
+                });
+            }
+
             return new ScoringResult
             {
                 Score = Math.Max(0, Math.Min(finalScore, maxMarks)),
@@ -216,7 +256,10 @@ Respond ONLY with valid JSON, no markdown, no explanations."),
                     : "Good coverage of key concepts",
                 KeywordsMatched = keywordAnalysis.Matched,
                 MissingKeywords = keywordAnalysis.Missing,
-                UsedFallback = true
+                UsedFallback = true,
+                IsComplete = isComplete,
+                CompletionStatus = completionStatus,
+                StepWiseBreakdown = stepWiseBreakdown
             };
         }
 
@@ -231,37 +274,63 @@ Respond ONLY with valid JSON, no markdown, no explanations."),
         {
             var keywordsList = keywords.Any() ? string.Join(", ", keywords) : "Not specified";
 
-            return $@"Evaluate this Karnataka PUC Mathematics answer strictly.
+            return $@"You are an experienced Karnataka PUC Board Mathematics examiner. Evaluate this answer EXACTLY like a real board exam evaluator.
 
-**Ideal Answer:**
+**IDEAL/MODEL ANSWER:**
 {idealAnswer}
 
-**Student's Answer:**
+**STUDENT'S ANSWER:**
 {studentAnswer}
 
-**Maximum Marks:** {maxMarks}
-**Key Concepts:** {keywordsList}
+**MAXIMUM MARKS:** {maxMarks}
+**KEY CONCEPTS TO CHECK:** {keywordsList}
 
-**Evaluation Criteria:**
-1. Mathematical correctness (40%)
-2. Step-by-step working (30%)
-3. Use of correct formulas/theorems (20%)
-4. Presentation and notation (10%)
+**EVALUATION RULES (Follow Karnataka PUC Board Standards):**
+1. Award marks STEP-BY-STEP - each logical step gets separate marks
+2. Give PARTIAL MARKS for:
+   - Correct approach but wrong final answer
+   - Correct formula written but calculation error
+   - Incomplete steps that show understanding
+3. DEDUCT marks for:
+   - Missing steps (even if answer is correct)
+   - Wrong formulas or theorems
+   - Calculation errors
+   - Poor presentation
+4. If answer is INCOMPLETE, clearly state what is missing
 
-**Instructions:**
-- Award marks strictly based on Karnataka PUC standards
-- Partial marks only for partial correct working
-- Deduct marks for incorrect steps or missing work
-- Check for all key concepts
+**STEP-WISE MARKING SCHEME:**
+- Divide the solution into logical steps
+- Assign marks to each step based on its importance
+- Award 0, partial, or full marks for each step
+- Sum up for total score
 
-**Required JSON Response Format:**
+**REQUIRED JSON RESPONSE:**
 {{
-  ""score"": <number 0 to {maxMarks}>,
-  ""feedback"": ""<2-3 sentences explaining the score>"",
-  ""missingPoints"": [""<concept 1>"", ""<concept 2>""],
-  ""strengths"": [""<strength 1>"", ""<strength 2>""],
-  ""improvement"": ""<specific suggestion>""
+  ""score"": <total marks awarded (0 to {maxMarks})>,
+  ""isComplete"": <true if answer is complete, false if incomplete>,
+  ""completionStatus"": ""Complete"" | ""Partial"" | ""Incomplete"",
+  ""completionPercentage"": <percentage of answer completed>,
+  ""stepWiseBreakdown"": [
+    {{
+      ""stepNumber"": 1,
+      ""stepDescription"": ""<what this step should contain>"",
+      ""maxMarks"": <marks allocated for this step>,
+      ""marksAwarded"": <marks given>,
+      ""status"": ""Complete"" | ""Partial"" | ""Missing"" | ""Incorrect"",
+      ""feedback"": ""<specific feedback for this step>""
+    }}
+  ],
+  ""feedback"": ""<overall 2-3 sentence summary>"",
+  ""missingPoints"": [""<missing concept 1>"", ""<missing concept 2>""],
+  ""strengths"": [""<what student did well>""],
+  ""improvement"": ""<specific actionable suggestion>""
 }}
+
+**IMPORTANT:** 
+- Be STRICT but FAIR like a real examiner
+- Award step marks even if final answer is wrong
+- Penalize missing working/steps
+- Provide constructive feedback for each step
 
 Respond ONLY with valid JSON.";
         }
@@ -327,6 +396,39 @@ Respond ONLY with valid JSON.";
 
             [JsonProperty("improvement")]
             public string? Improvement { get; set; }
+
+            [JsonProperty("isComplete")]
+            public bool IsComplete { get; set; } = true;
+
+            [JsonProperty("completionStatus")]
+            public string? CompletionStatus { get; set; }
+
+            [JsonProperty("completionPercentage")]
+            public double CompletionPercentage { get; set; } = 100;
+
+            [JsonProperty("stepWiseBreakdown")]
+            public List<StepWiseMarksDto>? StepWiseBreakdown { get; set; }
+        }
+
+        private class StepWiseMarksDto
+        {
+            [JsonProperty("stepNumber")]
+            public int StepNumber { get; set; }
+
+            [JsonProperty("stepDescription")]
+            public string StepDescription { get; set; } = string.Empty;
+
+            [JsonProperty("maxMarks")]
+            public double MaxMarks { get; set; }
+
+            [JsonProperty("marksAwarded")]
+            public double MarksAwarded { get; set; }
+
+            [JsonProperty("status")]
+            public string Status { get; set; } = string.Empty;
+
+            [JsonProperty("feedback")]
+            public string Feedback { get; set; } = string.Empty;
         }
 
         private class KeywordAnalysis

@@ -3,6 +3,19 @@ using System.Collections.Generic;
 namespace SmartStudyFunc.Models
 {
     /// <summary>
+    /// Represents step-wise marks breakdown for an answer
+    /// </summary>
+    public class StepWiseMarks
+    {
+        public int StepNumber { get; set; }
+        public string StepDescription { get; set; } = string.Empty;
+        public double MarksAwarded { get; set; }
+        public double MaxMarks { get; set; }
+        public string Status { get; set; } = string.Empty;  // "Complete", "Partial", "Missing", "Incorrect"
+        public string Feedback { get; set; } = string.Empty;
+    }
+
+    /// <summary>
     /// Result of AI scoring evaluation
     /// </summary>
     public class ScoringResult
@@ -16,6 +29,9 @@ namespace SmartStudyFunc.Models
         public List<string> KeywordsMatched { get; set; } = new();
         public List<string> MissingKeywords { get; set; } = new();
         public bool UsedFallback { get; set; } = false;
+        public List<StepWiseMarks> StepWiseBreakdown { get; set; } = new();
+        public bool IsComplete { get; set; } = true;
+        public string CompletionStatus { get; set; } = string.Empty;  // "Complete", "Partial", "Incomplete"
     }
 
     /// <summary>
@@ -50,6 +66,11 @@ namespace SmartStudyFunc.Models
         public List<string> MissingKeywords { get; set; } = new();
         public bool UsedFallback { get; set; }
         public string? Error { get; set; }
+        
+        // Step-wise evaluation fields
+        public List<StepWiseMarks> StepWiseBreakdown { get; set; } = new();
+        public bool IsComplete { get; set; } = true;
+        public string CompletionStatus { get; set; } = string.Empty;
     }
 
     /// <summary>

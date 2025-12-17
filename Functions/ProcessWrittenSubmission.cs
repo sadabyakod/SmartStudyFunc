@@ -252,19 +252,51 @@ namespace SmartStudyFunc.Functions
                     "[EVALUATION_STARTED] SubmissionId={SubmissionId}, QuestionCount={QuestionCount}",
                     submissionId, questions.Count);
 
+                _logger.LogWarning(
+                    "[PROCESS-EVAL] === CALLING EVALUATION SERVICE === SubmissionId={SubmissionId}, Questions={QuestionCount}",
+                    submissionId, questions.Count);
+                
                 var evaluationResult = await _evaluationService.EvaluateSubmissionAsync(
                     submission,
                     extractedText,
                     questions,
                     cancellationToken);
 
+                _logger.LogWarning(
+                    "[PROCESS-EVAL] === EVALUATION SERVICE RETURNED === SubmissionId={SubmissionId}, TotalScore={Score}",
+                    submissionId, evaluationResult.TotalScore);
+
                 evalStopwatch.Stop();
 
                 // ════════════════════════════════════════════════════════════════
-                // PHASE 5: Save Results and Update Status
+                // PHASE 5: Save Results to Blob Storage (Permanent Storage)
+                // ════════════════════════════════════════════════════════════════
+                string? resultBlobPath = null;
+                try
+                {
+                    resultBlobPath = await SaveEvaluationResultToBlobAsync(
+                        submissionId,
+                        examId,
+                        evaluationResult,
+                        cancellationToken);
+                    
+                    _logger.LogInformation(
+                        "[RESULT_SAVED_TO_BLOB] SubmissionId={SubmissionId}, BlobPath={BlobPath}",
+                        submissionId, resultBlobPath);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "[RESULT_BLOB_SAVE_FAILED] SubmissionId={SubmissionId}. Continuing with database save.",
+                        submissionId);
+                }
+
+                // ════════════════════════════════════════════════════════════════
+                // PHASE 6: Save Results to Database and Update Status
                 // ════════════════════════════════════════════════════════════════
                 await _repository.SaveEvaluationResultAsync(
                     evaluationResult,
+                    resultBlobPath,
                     evalStopwatch.ElapsedMilliseconds,
                     cancellationToken);
 
@@ -440,6 +472,49 @@ namespace SmartStudyFunc.Functions
             using var stream = new System.IO.MemoryStream(
                 System.Text.Encoding.UTF8.GetBytes(text));
             await blobClient.UploadAsync(stream, overwrite: true, cancellationToken: cancellationToken);
+
+            return $"{containerName}/{blobPath}";
+        }
+
+        /// <summary>
+        /// Saves evaluation results as JSON to blob storage for permanent student access.
+        /// This ensures students can view their detailed results anytime without data loss.
+        /// </summary>
+        private async Task<string> SaveEvaluationResultToBlobAsync(
+            Guid submissionId,
+            string examId,
+            WrittenEvaluationResult result,
+            CancellationToken cancellationToken)
+        {
+            var containerName = "evaluation-results";
+            var blobPath = $"{examId}/{submissionId}/evaluation-result.json";
+
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+
+            var blobClient = containerClient.GetBlobClient(blobPath);
+
+            // Serialize evaluation result to JSON with pretty formatting for readability
+            var jsonOptions = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            };
+            var json = JsonSerializer.Serialize(result, jsonOptions);
+
+            using var stream = new System.IO.MemoryStream(
+                System.Text.Encoding.UTF8.GetBytes(json));
+            
+            // Set content type for JSON
+            var uploadOptions = new Azure.Storage.Blobs.Models.BlobUploadOptions
+            {
+                HttpHeaders = new Azure.Storage.Blobs.Models.BlobHttpHeaders
+                {
+                    ContentType = "application/json"
+                }
+            };
+            
+            await blobClient.UploadAsync(stream, uploadOptions, cancellationToken: cancellationToken);
 
             return $"{containerName}/{blobPath}";
         }

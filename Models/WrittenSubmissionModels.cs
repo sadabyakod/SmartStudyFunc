@@ -39,9 +39,11 @@ namespace SmartStudyFunc.Models
         public DateTime SubmittedAt { get; set; }
         
         [JsonPropertyName("priority")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
         public int Priority { get; set; } = 1;
         
         [JsonPropertyName("retryCount")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
         public int RetryCount { get; set; } = 0;
     }
 

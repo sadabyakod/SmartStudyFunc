@@ -40,21 +40,29 @@ namespace SmartStudyFunc.Functions
 
             try
             {
+                // Query evaluations through WrittenSubmissions (which has ExamId)
                 var query = @"
                     SELECT 
                         e.Id,
-                        q.ExamId,
+                        ws.ExamId,
                         e.QuestionId,
-                        q.QuestionText,
+                        e.QuestionNumber,
+                        e.ExtractedAnswer as StudentAnswer,
+                        e.ModelAnswer,
                         e.AwardedScore as Score,
                         e.MaxScore as MaxMarks,
                         e.Feedback,
                         e.RubricBreakdown,
-                        e.EvaluatedAt as CreatedOn
+                        e.EvaluatedAt as CreatedOn,
+                        ws.StudentId,
+                        ws.Status as SubmissionStatus,
+                        ws.TotalScore as SubmissionTotalScore,
+                        ws.MaxPossibleScore as SubmissionMaxScore,
+                        ws.Percentage as SubmissionPercentage
                     FROM WrittenQuestionEvaluations e
-                    INNER JOIN ExamQuestions q ON e.QuestionId = q.Id
-                    WHERE q.ExamId = @ExamId
-                    ORDER BY e.EvaluatedAt DESC";
+                    INNER JOIN WrittenSubmissions ws ON e.WrittenSubmissionId = ws.Id
+                    WHERE ws.ExamId = @ExamId
+                    ORDER BY e.QuestionNumber, e.EvaluatedAt DESC";
 
                 using var conn = new SqlConnection(_connectionString);
                 await conn.OpenAsync();
@@ -72,11 +80,25 @@ namespace SmartStudyFunc.Functions
                 var totalScore = results.Sum(r => (double)(decimal)r.Score);
                 var totalMarks = results.Sum(r => (double)(decimal)r.MaxMarks);
                 var percentage = totalMarks > 0 ? Math.Round((totalScore / totalMarks) * 100, 2) : 0;
+                
+                // Get submission status (from first result since all belong to same exam)
+                var submissionStatus = (int)results[0].SubmissionStatus;
+                var statusText = submissionStatus switch
+                {
+                    0 => "PendingEvaluation",
+                    1 => "OcrProcessing",
+                    2 => "Evaluating",
+                    3 => "Completed",
+                    4 => "Failed",
+                    _ => "Unknown"
+                };
 
                 return new OkObjectResult(new
                 {
                     success = true,
                     examId,
+                    status = statusText,
+                    statusCode = submissionStatus,
                     totalQuestions = results.Count,
                     totalScore,
                     totalMarks,

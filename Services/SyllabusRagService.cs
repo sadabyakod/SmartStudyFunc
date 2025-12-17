@@ -81,6 +81,10 @@ namespace SmartStudyFunc.Services
             int topN = 5,
             CancellationToken cancellationToken = default)
         {
+            _logger.LogWarning(
+                "[RAG-ENTRY] GetRelevantSyllabusChunksAsync called - Class={ClassName}, Subject={Subject}, Chapter={Chapter}",
+                className, subject, chapter);
+            
             if (string.IsNullOrWhiteSpace(questionText))
             {
                 _logger.LogWarning("Empty question text provided for syllabus RAG");
@@ -90,6 +94,8 @@ namespace SmartStudyFunc.Services
             try
             {
                 // Step 1: Generate embedding for the question
+                _logger.LogWarning("[RAG-EMBED] Generating embedding for question (length: {Length})...", questionText.Length);
+                
                 _logger.LogDebug(
                     "Generating embedding for question: {QuestionPreview}...",
                     questionText.Substring(0, Math.Min(50, questionText.Length)));
@@ -98,16 +104,19 @@ namespace SmartStudyFunc.Services
                 try
                 {
                     questionEmbedding = await _embeddingService.CreateEmbedding(questionText);
+                    _logger.LogWarning("[RAG-EMBED] Embedding created successfully");
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to create embedding for question");
+                    _logger.LogError(ex, "[RAG-EMBED] Failed to create embedding for question");
                     return new List<SyllabusChunk>();
                 }
 
                 // Step 2: Query chunks filtered by class/subject/chapter
+                _logger.LogWarning("[RAG-QUERY] Querying database for chunks...");
                 var chunks = await GetChunksWithEmbeddingsAsync(
                     className, subject, chapter, cancellationToken);
+                _logger.LogWarning("[RAG-QUERY] Query returned {Count} chunks", chunks.Count);
 
                 if (chunks.Count == 0)
                 {

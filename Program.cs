@@ -16,52 +16,52 @@ var host = new HostBuilder()
     .ConfigureServices((context, services) =>
     {
         var configuration = context.Configuration;
-        
+
         services.AddApplicationInsightsTelemetryWorkerService();
         services.ConfigureFunctionsApplicationInsights();
-        
+
         // Register custom services for dependency injection
         services.AddSingleton<EmbeddingService>();
         services.AddSingleton<SmartStudyFunc.OpenAiService>();
-        
+
         // Register evaluation services
         services.AddSingleton<OcrService>(sp => 
         {
             var logger = sp.GetRequiredService<ILogger<OcrService>>();
             return new OcrService(logger);
         });
-        
+
         services.AddSingleton<AiScoringService>(sp => 
         {
             var logger = sp.GetRequiredService<ILogger<AiScoringService>>();
             return new AiScoringService(logger);
         });
-        
+
         // Register function classes for batch evaluation dependency
-        services.AddTransient<EvaluateAnswer>();
-        
+        services.AddScoped<EvaluateAnswer>();
+
         // ========================================
         // Azure Storage Clients
         // ========================================
-        
+
         // Register BlobServiceClient
         services.AddSingleton(sp =>
         {
             var connectionString = configuration["AzureWebJobsStorage"];
             return new BlobServiceClient(connectionString);
         });
-        
+
         // Register QueueServiceClient for re-enqueueing with retry
         services.AddSingleton(sp =>
         {
             var connectionString = configuration["AzureWebJobsStorage"];
             return new QueueServiceClient(connectionString);
         });
-        
+
         // ========================================
         // Written Answer Processing Services
         // ========================================
-        
+
         // Register Azure OpenAI Client
         services.AddSingleton(sp =>
         {
@@ -69,17 +69,18 @@ var host = new HostBuilder()
             var apiKey = configuration["AzureOpenAI:ApiKey"];
             return new OpenAIClient(new Uri(endpoint!), new AzureKeyCredential(apiKey!));
         });
-        
-        // Register Google Cloud Vision Client
-        services.AddSingleton(sp =>
+
+        // Note: Google Cloud Vision client registration is not needed when using API Key auth.
+        // The GoogleVisionOcrService handles both API Key and Service Account authentication internally.
+
+        // Register Google Vision OCR Service (supports both API Key and Service Account auth)
+        services.AddSingleton<IGoogleVisionOcrService>(sp =>
         {
-            // Uses GOOGLE_APPLICATION_CREDENTIALS environment variable
-            return ImageAnnotatorClient.Create();
+            var blobServiceClient = sp.GetRequiredService<BlobServiceClient>();
+            var logger = sp.GetRequiredService<ILogger<GoogleVisionOcrService>>();
+            return new GoogleVisionOcrService(configuration, blobServiceClient, logger);
         });
-        
-        // Register Google Vision OCR Service
-        services.AddSingleton<IGoogleVisionOcrService, GoogleVisionOcrService>();
-        
+
         // Register Written Submission Repository
         services.AddSingleton<IWrittenSubmissionRepository>(sp =>
         {
@@ -88,7 +89,7 @@ var host = new HostBuilder()
             var logger = sp.GetRequiredService<ILogger<WrittenSubmissionRepository>>();
             return new WrittenSubmissionRepository(connectionString!, logger);
         });
-        
+
         // Register Syllabus RAG Service for step-wise board blueprint evaluation
         services.AddSingleton<ISyllabusRagService>(sp =>
         {
@@ -96,7 +97,7 @@ var host = new HostBuilder()
             var logger = sp.GetRequiredService<ILogger<SyllabusRagService>>();
             return new SyllabusRagService(configuration, embeddingService, logger);
         });
-        
+
         // Register Written Answer Evaluation Service (with Syllabus RAG for step-wise evaluation)
         services.AddSingleton<IWrittenAnswerEvaluationService>(sp =>
         {

@@ -41,7 +41,7 @@ namespace SmartStudyFunc.Services
         private readonly string _deploymentName;
         private readonly ISyllabusRagService _syllabusRagService;
         private readonly ILogger<WrittenAnswerEvaluationService> _logger;
-        private readonly TimeSpan _timeout = TimeSpan.FromSeconds(120);
+        private readonly TimeSpan _timeout = TimeSpan.FromSeconds(60);
 
         // JSON serializer options for consistent output
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -71,6 +71,10 @@ namespace SmartStudyFunc.Services
             List<ExamQuestionWithRubric> questions,
             CancellationToken cancellationToken = default)
         {
+            _logger.LogWarning(
+                "[EVAL-START] [{SubmissionId}] === STARTING EVALUATION === Questions: {QuestionCount}, ExtractedTextLength: {TextLength}",
+                submission.Id, questions.Count, extractedText?.Length ?? 0);
+            
             _logger.LogInformation(
                 "[{SubmissionId}] Starting BOARD BLUEPRINT evaluation for {QuestionCount} questions",
                 submission.Id, questions.Count);
@@ -84,8 +88,10 @@ namespace SmartStudyFunc.Services
             };
 
             // Step 1: Segment OCR text into per-question answers
+            _logger.LogWarning("[EVAL-SEGMENT] [{SubmissionId}] Starting answer segmentation...", submission.Id);
             var segmentedAnswers = await SegmentAnswersByQuestionAsync(
                 extractedText, questions, submission.Id, cancellationToken);
+            _logger.LogWarning("[EVAL-SEGMENT] [{SubmissionId}] Segmentation complete. Found {Count} answers", submission.Id, segmentedAnswers.Count);
 
             // Step 2: Evaluate each question with step-wise marking
             var evaluations = new List<WrittenQuestionEvaluation>();
@@ -100,19 +106,35 @@ namespace SmartStudyFunc.Services
                     
                 try
                 {
+                    _logger.LogWarning(
+                        "[EVAL-Q{QuestionNumber}] [{SubmissionId}] === STARTING Q{QuestionNumber} === MaxScore: {MaxScore}",
+                        question.QuestionNumber, submission.Id, question.QuestionNumber, question.MaxScore);
+                    
+                    _logger.LogInformation(
+                        "[{SubmissionId}] Starting evaluation for Q{QuestionNumber}",
+                        submission.Id, question.QuestionNumber);
+
+                    _logger.LogWarning(
+                        "[EVAL-Q{QuestionNumber}] [{SubmissionId}] Calling EvaluateSingleQuestionStepWiseAsync...",
+                        question.QuestionNumber, submission.Id);
+                    
                     var evaluation = await EvaluateSingleQuestionStepWiseAsync(
                         submission.Id,
                         question,
                         studentAnswer,
                         cancellationToken);
 
+                    _logger.LogWarning(
+                        "[EVAL-Q{QuestionNumber}] [{SubmissionId}] EvaluateSingleQuestionStepWiseAsync returned",
+                        question.QuestionNumber, submission.Id);
+
                     evaluations.Add(evaluation);
                     totalScore += evaluation.AwardedScore;
                     maxPossibleScore += question.MaxScore;
 
-                    _logger.LogInformation(
-                        "[{SubmissionId}] Q{QuestionNumber} step-wise evaluation: {Score}/{MaxScore}",
-                        submission.Id, question.QuestionNumber,
+                    _logger.LogWarning(
+                        "[EVAL-Q{QuestionNumber}] [{SubmissionId}] === Q{QuestionNumber} COMPLETED === Score: {Score}/{MaxScore}",
+                        question.QuestionNumber, submission.Id, question.QuestionNumber,
                         evaluation.AwardedScore, question.MaxScore);
                 }
                 catch (Exception ex)
@@ -131,7 +153,7 @@ namespace SmartStudyFunc.Services
                         ExtractedAnswer = studentAnswer,
                         MaxScore = question.MaxScore,
                         AwardedScore = 0,
-                        Feedback = "Evaluation failed due to system error.",
+                        Feedback = $"Evaluation failed: {ex.Message}",
                         RubricBreakdown = "{}",
                         EvaluatedAt = DateTime.UtcNow
                     });
@@ -169,14 +191,26 @@ namespace SmartStudyFunc.Services
             string studentAnswer,
             CancellationToken cancellationToken)
         {
-            // Step 1: Fetch relevant syllabus chunks using RAG
+            _logger.LogWarning(
+                "[EVAL-SINGLE] [{SubmissionId}] Q{QuestionNumber} - METHOD ENTRY - Creating timeout ({TimeoutSeconds}s)",
+                submissionId, question.QuestionNumber, _timeout.TotalSeconds);
+            
+            // Create timeout for entire evaluation (RAG + OpenAI)
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(_timeout);
+
+            _logger.LogWarning(
+                "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - Calling RAG service...",
+                submissionId, question.QuestionNumber);
+            
+            // Step 1: Fetch relevant syllabus chunks using RAG (with timeout)
             var syllabusChunks = await _syllabusRagService.GetRelevantSyllabusChunksAsync(
                 question.QuestionText,
                 question.ClassName,
                 question.Subject,
                 question.Chapter,
                 topN: 5,
-                cancellationToken);
+                cts.Token);
 
             var syllabusContext = syllabusChunks.Any()
                 ? string.Join("\n\n---\n\n", syllabusChunks.Select(c => c.ChunkText))
@@ -184,10 +218,18 @@ namespace SmartStudyFunc.Services
 
             var syllabusChunkIds = syllabusChunks.Select(c => c.ChunkId).ToList();
 
+            _logger.LogWarning(
+                "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - RAG COMPLETED - Retrieved {ChunkCount} chunks",
+                submissionId, question.QuestionNumber, syllabusChunks.Count);
+            
             _logger.LogDebug(
                 "[{SubmissionId}] Q{QuestionNumber}: Retrieved {ChunkCount} syllabus chunks",
                 submissionId, question.QuestionNumber, syllabusChunks.Count);
 
+            _logger.LogWarning(
+                "[EVAL-PROMPT] [{SubmissionId}] Q{QuestionNumber} - Building evaluation prompt...",
+                submissionId, question.QuestionNumber);
+            
             // Step 2: Build comprehensive evaluation prompt
             var prompt = BuildStepWiseEvaluationPrompt(
                 question,
@@ -195,8 +237,9 @@ namespace SmartStudyFunc.Services
                 syllabusContext);
 
             // Step 3: Call OpenAI (SINGLE CALL per question)
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(_timeout);
+            _logger.LogWarning(
+                "[EVAL-OPENAI] [{SubmissionId}] Q{QuestionNumber} - Calling Azure OpenAI API... (Deployment: {Deployment})",
+                submissionId, question.QuestionNumber, _deploymentName);
 
             var options = new ChatCompletionsOptions
             {
@@ -210,14 +253,29 @@ namespace SmartStudyFunc.Services
                 MaxTokens = 2000
             };
 
+            var apiCallStart = DateTime.UtcNow;
             var response = await _openAiClient.GetChatCompletionsAsync(options, cts.Token);
+            var apiCallDuration = DateTime.UtcNow - apiCallStart;
+            
+            _logger.LogWarning(
+                "[EVAL-OPENAI] [{SubmissionId}] Q{QuestionNumber} - OpenAI API COMPLETED in {DurationMs}ms",
+                submissionId, question.QuestionNumber, apiCallDuration.TotalMilliseconds);
+            
             var content = response.Value.Choices[0].Message.Content;
+            
+            _logger.LogWarning(
+                "[EVAL-PARSE] [{SubmissionId}] Q{QuestionNumber} - Parsing response (length: {ResponseLength})...",
+                submissionId, question.QuestionNumber, content?.Length ?? 0);
 
             // Step 4: Parse structured response
             var evalResult = ParseStepWiseEvaluationResponse(
                 content,
                 question.MaxScore,
                 syllabusChunkIds);
+
+            _logger.LogWarning(
+                "[EVAL-SINGLE] [{SubmissionId}] Q{QuestionNumber} - METHOD EXIT - Awarded: {Score}/{MaxScore}",
+                submissionId, question.QuestionNumber, evalResult.StudentEvaluation?.TotalAwardedMarks ?? 0, question.MaxScore);
 
             return new WrittenQuestionEvaluation
             {

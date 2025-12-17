@@ -2,18 +2,23 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
 using Google.Cloud.Vision.V1;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace SmartStudyFunc.Services
 {
     /// <summary>
-    /// Service for performing OCR using Google Cloud Vision API
+    /// Service for performing OCR using Google Cloud Vision API.
+    /// Supports both API Key and Service Account authentication.
+    /// Uses DOCUMENT_TEXT_DETECTION for handwritten text recognition.
     /// </summary>
     public interface IGoogleVisionOcrService
     {
@@ -43,11 +48,47 @@ namespace SmartStudyFunc.Services
 
     public class GoogleVisionOcrService : IGoogleVisionOcrService
     {
-        private readonly ImageAnnotatorClient _visionClient;
+        private readonly ImageAnnotatorClient? _visionClient;
         private readonly BlobServiceClient _blobServiceClient;
         private readonly ILogger<GoogleVisionOcrService> _logger;
+        private readonly string? _apiKey;
+        private readonly HttpClient _httpClient;
         private readonly TimeSpan _timeout = TimeSpan.FromSeconds(60);
+        private const string VisionApiBaseUrl = "https://vision.googleapis.com/v1/images:annotate";
 
+        /// <summary>
+        /// Creates a GoogleVisionOcrService with support for both API Key and Service Account auth.
+        /// Priority: API Key (GoogleCloud:ApiKey) > Service Account (GOOGLE_APPLICATION_CREDENTIALS)
+        /// </summary>
+        public GoogleVisionOcrService(
+            IConfiguration configuration,
+            BlobServiceClient blobServiceClient,
+            ILogger<GoogleVisionOcrService> logger,
+            HttpClient? httpClient = null)
+        {
+            _blobServiceClient = blobServiceClient ?? throw new ArgumentNullException(nameof(blobServiceClient));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _httpClient = httpClient ?? new HttpClient();
+
+            // Try API Key first (simpler setup)
+            _apiKey = configuration["GoogleCloud:ApiKey"];
+
+            if (!string.IsNullOrEmpty(_apiKey))
+            {
+                _logger.LogInformation("GoogleVisionOcrService initialized with API Key authentication");
+                _visionClient = null; // Will use REST API with API Key
+            }
+            else
+            {
+                // Fall back to service account (GOOGLE_APPLICATION_CREDENTIALS)
+                _logger.LogInformation("GoogleVisionOcrService initialized with Service Account authentication");
+                _visionClient = ImageAnnotatorClient.Create();
+            }
+        }
+
+        /// <summary>
+        /// Alternative constructor for when ImageAnnotatorClient is pre-configured (DI scenario)
+        /// </summary>
         public GoogleVisionOcrService(
             ImageAnnotatorClient visionClient,
             BlobServiceClient blobServiceClient,
@@ -56,6 +97,8 @@ namespace SmartStudyFunc.Services
             _visionClient = visionClient;
             _blobServiceClient = blobServiceClient;
             _logger = logger;
+            _apiKey = null;
+            _httpClient = new HttpClient();
         }
 
         public async Task<OcrResult> ExtractTextFromBlobsAsync(
@@ -148,6 +191,103 @@ namespace SmartStudyFunc.Services
             memoryStream.Position = 0;
 
             var imageBytes = memoryStream.ToArray();
+
+            // Use API Key REST API or SDK based on configuration
+            if (!string.IsNullOrEmpty(_apiKey))
+            {
+                return await ProcessWithApiKeyAsync(imageBytes, blobPath, pageNumber, submissionId, cancellationToken);
+            }
+            else
+            {
+                return await ProcessWithSdkAsync(imageBytes, blobPath, pageNumber, submissionId, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// Process image using Google Cloud Vision REST API with API Key.
+        /// Uses DOCUMENT_TEXT_DETECTION for handwritten text recognition.
+        /// </summary>
+        private async Task<OcrPageDetail> ProcessWithApiKeyAsync(
+            byte[] imageBytes,
+            string blobPath,
+            int pageNumber,
+            Guid submissionId,
+            CancellationToken cancellationToken)
+        {
+            var base64Image = Convert.ToBase64String(imageBytes);
+            
+            // Build request for DOCUMENT_TEXT_DETECTION (best for handwriting)
+            var requestBody = new
+            {
+                requests = new[]
+                {
+                    new
+                    {
+                        image = new { content = base64Image },
+                        features = new[]
+                        {
+                            new { type = "DOCUMENT_TEXT_DETECTION", maxResults = 1 }
+                        },
+                        imageContext = new
+                        {
+                            languageHints = new[] { "en", "hi", "kn" } // English, Hindi, Kannada
+                        }
+                    }
+                }
+            };
+
+            var jsonContent = JsonSerializer.Serialize(requestBody);
+            var httpContent = new StringContent(jsonContent, Encoding.UTF8, "application/json");
+
+            var requestUrl = $"{VisionApiBaseUrl}?key={_apiKey}";
+            var response = await _httpClient.PostAsync(requestUrl, httpContent, cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync(cancellationToken);
+                _logger.LogError(
+                    "[{SubmissionId}] Google Vision API error for page {PageNumber}: {Status} - {Error}",
+                    submissionId, pageNumber, response.StatusCode, errorContent);
+                throw new HttpRequestException($"Google Vision API returned {response.StatusCode}: {errorContent}");
+            }
+
+            var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+            var apiResponse = JsonSerializer.Deserialize<GoogleVisionApiResponse>(responseJson, 
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            var fullText = apiResponse?.Responses?.FirstOrDefault()?.FullTextAnnotation?.Text ?? string.Empty;
+            var confidence = apiResponse?.Responses?.FirstOrDefault()?.FullTextAnnotation?.Pages?
+                .SelectMany(p => p.Blocks ?? Enumerable.Empty<GoogleVisionBlock>())
+                .SelectMany(b => b.Paragraphs ?? Enumerable.Empty<GoogleVisionParagraph>())
+                .Where(p => p.Confidence > 0)
+                .Select(p => p.Confidence)
+                .DefaultIfEmpty(0.8f)
+                .Average() ?? 0.8f;
+
+            _logger.LogDebug(
+                "[{SubmissionId}] API Key OCR page {PageNumber}: {CharCount} chars, {Confidence:P2} confidence",
+                submissionId, pageNumber, fullText.Length, confidence);
+
+            return new OcrPageDetail
+            {
+                PageNumber = pageNumber,
+                BlobPath = blobPath,
+                RawText = fullText,
+                Confidence = confidence
+            };
+        }
+
+        /// <summary>
+        /// Process image using Google Cloud Vision SDK (service account auth).
+        /// Uses DOCUMENT_TEXT_DETECTION for handwritten text recognition.
+        /// </summary>
+        private async Task<OcrPageDetail> ProcessWithSdkAsync(
+            byte[] imageBytes,
+            string blobPath,
+            int pageNumber,
+            Guid submissionId,
+            CancellationToken cancellationToken)
+        {
             var image = Image.FromBytes(imageBytes);
 
             // Check if PDF (multi-page support)
@@ -156,8 +296,8 @@ namespace SmartStudyFunc.Services
                 return await ProcessPdfAsync(image, blobPath, pageNumber, submissionId, cancellationToken);
             }
 
-            // Process single image
-            var response = await _visionClient.DetectDocumentTextAsync(image);
+            // Process single image using DOCUMENT_TEXT_DETECTION
+            var response = await _visionClient!.DetectDocumentTextAsync(image);
             
             var text = response?.Text ?? string.Empty;
             var confidence = CalculateAverageConfidence(response);
@@ -178,6 +318,11 @@ namespace SmartStudyFunc.Services
             Guid submissionId,
             CancellationToken cancellationToken)
         {
+            if (_visionClient == null)
+            {
+                throw new InvalidOperationException("PDF processing requires service account authentication. API Key mode does not support PDF.");
+            }
+
             // For PDF, use async batch annotation
             var response = await _visionClient.DetectDocumentTextAsync(image);
             
@@ -302,16 +447,84 @@ namespace SmartStudyFunc.Services
 
         private static (string containerName, string blobName) ParseBlobPath(string blobPath)
         {
-            // Expected format: "container/path/to/blob.ext" or just path if container is known
-            var parts = blobPath.Split('/', 2);
+            // Expected format: "container-name/path/to/blob.ext" or just blob path
+            // If path doesn't start with a known container prefix, assume it's in student-answers container
             
-            if (parts.Length == 2)
+            // Check if path starts with a container name followed by slash
+            if (blobPath.StartsWith("student-answers/", StringComparison.OrdinalIgnoreCase))
             {
-                return (parts[0], parts[1]);
+                return ("student-answers", blobPath.Substring("student-answers/".Length));
+            }
+            else if (blobPath.StartsWith("written-answers/", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("written-answers", blobPath.Substring("written-answers/".Length));
             }
             
-            // Default container
-            return ("written-answers", blobPath);
+            // Default: entire path is blob name in student-answers container
+            return ("student-answers", blobPath);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════════
+    // Google Vision API Response Models (for API Key authentication via REST)
+    // ═══════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Root response from Google Vision API
+    /// </summary>
+    public class GoogleVisionApiResponse
+    {
+        public List<GoogleVisionAnnotateImageResponse>? Responses { get; set; }
+    }
+
+    public class GoogleVisionAnnotateImageResponse
+    {
+        public GoogleVisionFullTextAnnotation? FullTextAnnotation { get; set; }
+        public GoogleVisionError? Error { get; set; }
+    }
+
+    public class GoogleVisionFullTextAnnotation
+    {
+        public string Text { get; set; } = string.Empty;
+        public List<GoogleVisionPage>? Pages { get; set; }
+    }
+
+    public class GoogleVisionPage
+    {
+        public int Width { get; set; }
+        public int Height { get; set; }
+        public float Confidence { get; set; }
+        public List<GoogleVisionBlock>? Blocks { get; set; }
+    }
+
+    public class GoogleVisionBlock
+    {
+        public string BlockType { get; set; } = string.Empty;
+        public float Confidence { get; set; }
+        public List<GoogleVisionParagraph>? Paragraphs { get; set; }
+    }
+
+    public class GoogleVisionParagraph
+    {
+        public float Confidence { get; set; }
+        public List<GoogleVisionWord>? Words { get; set; }
+    }
+
+    public class GoogleVisionWord
+    {
+        public float Confidence { get; set; }
+        public List<GoogleVisionSymbol>? Symbols { get; set; }
+    }
+
+    public class GoogleVisionSymbol
+    {
+        public string Text { get; set; } = string.Empty;
+        public float Confidence { get; set; }
+    }
+
+    public class GoogleVisionError
+    {
+        public int Code { get; set; }
+        public string Message { get; set; } = string.Empty;
     }
 }

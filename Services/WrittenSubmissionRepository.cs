@@ -33,7 +33,8 @@ namespace SmartStudyFunc.Services
             CancellationToken cancellationToken = default);
         
         Task SaveEvaluationResultAsync(
-            WrittenEvaluationResult result, 
+            WrittenEvaluationResult result,
+            string? resultBlobPath = null,
             long? processingTimeMs = null,
             CancellationToken cancellationToken = default);
         
@@ -200,6 +201,7 @@ namespace SmartStudyFunc.Services
 
         public async Task SaveEvaluationResultAsync(
             WrittenEvaluationResult result,
+            string? resultBlobPath = null,
             long? processingTimeMs = null,
             CancellationToken cancellationToken = default)
         {
@@ -209,7 +211,7 @@ namespace SmartStudyFunc.Services
 
             try
             {
-                // Update submission with final scores
+                // Update submission with final scores and result blob path
                 const string updateSubmissionSql = @"
                     UPDATE WrittenSubmissions
                     SET Status = @Status,
@@ -218,6 +220,7 @@ namespace SmartStudyFunc.Services
                         MaxPossibleScore = @MaxPossibleScore,
                         Percentage = @Percentage,
                         Grade = @Grade,
+                        EvaluationResultBlobPath = @ResultBlobPath,
                         EvaluationProcessingTimeMs = @ProcessingTimeMs
                     WHERE Id = @Id";
 
@@ -230,6 +233,7 @@ namespace SmartStudyFunc.Services
                     cmd.Parameters.AddWithValue("@MaxPossibleScore", result.MaxPossibleScore);
                     cmd.Parameters.AddWithValue("@Percentage", result.Percentage);
                     cmd.Parameters.AddWithValue("@Grade", CalculateGrade(result.Percentage));
+                    cmd.Parameters.AddWithValue("@ResultBlobPath", (object?)resultBlobPath ?? DBNull.Value);
                     cmd.Parameters.AddWithValue("@ProcessingTimeMs", (object?)processingTimeMs ?? DBNull.Value);
                     
                     await cmd.ExecuteNonQueryAsync(cancellationToken);

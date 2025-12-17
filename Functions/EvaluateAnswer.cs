@@ -179,20 +179,56 @@ namespace SmartStudyFunc.Functions
                 {
                     await conn.OpenAsync(ct);
                     
-                    // Create rubric breakdown JSON
+                    // Create rubric breakdown JSON with step-wise marks
                     var rubricBreakdown = JsonConvert.SerializeObject(new
                     {
                         KeywordsMatched = scoringResult.KeywordsMatched,
                         MissingKeywords = scoringResult.MissingKeywords,
                         Strengths = scoringResult.Strengths,
-                        ImprovementSuggestion = scoringResult.ImprovementSuggestion
+                        ImprovementSuggestion = scoringResult.ImprovementSuggestion,
+                        StepWiseBreakdown = scoringResult.StepWiseBreakdown,
+                        IsComplete = scoringResult.IsComplete,
+                        CompletionStatus = scoringResult.CompletionStatus
                     });
+                    
+                    // Determine or create WrittenSubmissionId
+                    var submissionId = request.WrittenSubmissionId ?? Guid.Empty;
+                    
+                    if (submissionId == Guid.Empty)
+                    {
+                        // Create a new WrittenSubmission record for this evaluation
+                        submissionId = Guid.NewGuid();
+                        var createSubmissionQuery = @"
+                            INSERT INTO WrittenSubmissions (
+                                Id, ExamId, StudentId, FilePaths, Status, 
+                                TotalScore, MaxPossibleScore, Percentage, 
+                                SubmittedAt, EvaluatedAt
+                            )
+                            VALUES (
+                                @Id, @ExamId, @StudentId, '[]', 3,
+                                @TotalScore, @MaxScore, @Percentage,
+                                GETUTCDATE(), GETUTCDATE()
+                            )";
+                        
+                        await conn.ExecuteAsync(createSubmissionQuery, new
+                        {
+                            Id = submissionId,
+                            ExamId = request.ExamId,
+                            StudentId = "API-USER", // Default for API-submitted evaluations
+                            TotalScore = (decimal)scoringResult.Score,
+                            MaxScore = (decimal)scoringResult.MaxMarks,
+                            Percentage = Math.Round((scoringResult.Score / scoringResult.MaxMarks) * 100, 2)
+                        });
+                        
+                        _logger.LogInformation("Created new WrittenSubmission {SubmissionId} for ExamId={ExamId}", 
+                            submissionId, request.ExamId);
+                    }
                     
                     evaluationId = await conn.ExecuteScalarAsync<int>(
                         insertQuery,
                         new
                         {
-                            WrittenSubmissionId = request.WrittenSubmissionId ?? Guid.NewGuid(), // Generate new GUID if not provided
+                            WrittenSubmissionId = submissionId,
                             QuestionId = request.QuestionId,
                             QuestionNumber = 1, // Would come from actual question
                             ExtractedAnswer = request.StudentAnswerText,
@@ -249,7 +285,11 @@ namespace SmartStudyFunc.Functions
                     Improvements = scoringResult.ImprovementSuggestion,
                     KeywordsMatched = scoringResult.KeywordsMatched,
                     MissingKeywords = scoringResult.MissingKeywords,
-                    UsedFallback = scoringResult.UsedFallback
+                    UsedFallback = scoringResult.UsedFallback,
+                    // Step-wise evaluation details
+                    StepWiseBreakdown = scoringResult.StepWiseBreakdown,
+                    IsComplete = scoringResult.IsComplete,
+                    CompletionStatus = scoringResult.CompletionStatus
                 };
 
                 return new OkObjectResult(response);
