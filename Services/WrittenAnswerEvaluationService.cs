@@ -41,7 +41,7 @@ namespace SmartStudyFunc.Services
         private readonly string _deploymentName;
         private readonly ISyllabusRagService _syllabusRagService;
         private readonly ILogger<WrittenAnswerEvaluationService> _logger;
-        private readonly TimeSpan _timeout = TimeSpan.FromSeconds(60);
+        private readonly TimeSpan _timeout = TimeSpan.FromSeconds(90); // 90s timeout per question for AI evaluation
 
         // JSON serializer options for consistent output
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -200,27 +200,45 @@ namespace SmartStudyFunc.Services
             cts.CancelAfter(_timeout);
 
             _logger.LogWarning(
-                "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - Calling RAG service...",
+                "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - Calling RAG service with fallback...",
                 submissionId, question.QuestionNumber);
             
-            // Step 1: Fetch relevant syllabus chunks using RAG (with timeout)
-            var syllabusChunks = await _syllabusRagService.GetRelevantSyllabusChunksAsync(
-                question.QuestionText,
-                question.ClassName,
-                question.Subject,
-                question.Chapter,
-                topN: 5,
-                cts.Token);
+            // Step 1: Fetch relevant syllabus chunks using RAG (with timeout and fallback)
+            List<SyllabusChunk> syllabusChunks;
+            try
+            {
+                syllabusChunks = await _syllabusRagService.GetRelevantSyllabusChunksAsync(
+                    question.QuestionText,
+                    question.ClassName,
+                    question.Subject,
+                    question.Chapter,
+                    topN: 5,
+                    cts.Token);
+
+                _logger.LogWarning(
+                    "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - RAG COMPLETED - Retrieved {ChunkCount} chunks",
+                    submissionId, question.QuestionNumber, syllabusChunks.Count);
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - RAG TIMEOUT - Using model answer as fallback",
+                    submissionId, question.QuestionNumber);
+                syllabusChunks = new List<SyllabusChunk>();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - RAG FAILED - Using model answer as fallback: {Error}",
+                    submissionId, question.QuestionNumber, ex.Message);
+                syllabusChunks = new List<SyllabusChunk>();
+            }
 
             var syllabusContext = syllabusChunks.Any()
                 ? string.Join("\n\n---\n\n", syllabusChunks.Select(c => c.ChunkText))
                 : question.ModelAnswer; // Fallback to model answer if no syllabus
 
             var syllabusChunkIds = syllabusChunks.Select(c => c.ChunkId).ToList();
-
-            _logger.LogWarning(
-                "[EVAL-RAG] [{SubmissionId}] Q{QuestionNumber} - RAG COMPLETED - Retrieved {ChunkCount} chunks",
-                submissionId, question.QuestionNumber, syllabusChunks.Count);
             
             _logger.LogDebug(
                 "[{SubmissionId}] Q{QuestionNumber}: Retrieved {ChunkCount} syllabus chunks",

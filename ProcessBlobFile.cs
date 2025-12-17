@@ -335,7 +335,7 @@ namespace SmartStudyFunc
                             using var embCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                             embCts.CancelAfter(TimeSpan.FromSeconds(30));
                             
-                            byte[] emb = await _embeddingService.CreateEmbedding(chunk);
+                            byte[] emb = await _embeddingService.CreateEmbedding(chunk, embCts.Token);
                             
                             if (emb == null || emb.Length == 0)
                             {

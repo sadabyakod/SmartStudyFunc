@@ -1,28 +1,54 @@
 {
   "IsEncrypted": false,
   "Values": {
+    "// ========================================": "",
+    "// Azure Functions Runtime Configuration": "",
+    "// ========================================": "",
     "AzureWebJobsStorage": "DefaultEndpointsProtocol=https;AccountName=YOUR_STORAGE_ACCOUNT;AccountKey=YOUR_KEY;EndpointSuffix=core.windows.net",
     "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
     "FUNCTIONS_EXTENSION_VERSION": "~4",
     "WEBSITE_RUN_FROM_PACKAGE": "1",
-    "USE_REAL_EMBEDDINGS": "true",
-    
+
+    "// ========================================": "",
+    "// Azure OpenAI Configuration (GPT-4 for evaluation)": "",
+    "// ========================================": "",
     "AzureOpenAI:Endpoint": "https://YOUR-RESOURCE.openai.azure.com/",
     "AzureOpenAI:ApiKey": "YOUR-AZURE-OPENAI-KEY",
-    "AzureOpenAI:DeploymentName": "gpt-4o-mini",
+    "AzureOpenAI:DeploymentName": "gpt-4",
     "AzureOpenAI:EmbeddingDeployment": "text-embedding-3-small",
-    "AzureOpenAI:ChatDeployment": "gpt-4o-mini",
-    
+    "AzureOpenAI:ChatDeployment": "gpt-4",
+
+    "// ========================================": "",
+    "// Azure SQL Database Connection": "",
+    "// ========================================": "",
     "SqlConnectionString": "Server=tcp:your-server.database.windows.net,1433;Initial Catalog=your-db;User ID=your-user;Password=your-password;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;",
-    
-    "GOOGLE_APPLICATION_CREDENTIALS": "path/to/your/google-credentials.json",
-    
+
+    "// ========================================": "",
+    "// Google Cloud Vision API (OCR for handwritten text)": "",
+    "// Option 1: API Key (simpler, recommended for testing)": "",
+    "// Option 2: Service Account (recommended for production)": "",
+    "// ========================================": "",
+    "GoogleCloud:ApiKey": "YOUR-GOOGLE-CLOUD-API-KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS": "path/to/your/google-service-account.json",
+
+    "// ========================================": "",
+    "// Azure Blob Storage (for answer sheet images)": "",
+    "// ========================================": "",
+    "BlobStorage:ConnectionString": "DefaultEndpointsProtocol=https;AccountName=YOUR_STORAGE_ACCOUNT;AccountKey=YOUR_KEY;EndpointSuffix=core.windows.net",
+
+    "// ========================================": "",
+    "// Application Settings": "",
+    "// ========================================": "",
+    "USE_REAL_EMBEDDINGS": "true",
     "WrittenSubmission:RetentionDays": "30",
-    
-    "AZURE_FUNCTION_APP_NAME": "smartstudy-func",
-    "AZURE_RESOURCE_GROUP": "rg-smartstudy-dev",
-    "AZURE_SUBSCRIPTION_ID": "64cf6114-e23f-4507-ba2f-7bf5b133a9fe",
-    "AZURE_FUNCTION_URL": "https://smartstudy-func-bgdre2hwded4cmg6.centralindia-01.azurewebsites.net"
+
+    "// ========================================": "",
+    "// Azure Resource Identifiers (for deployment)": "",
+    "// ========================================": "",
+    "AZURE_FUNCTION_APP_NAME": "your-func-app-name",
+    "AZURE_RESOURCE_GROUP": "rg-your-resource-group",
+    "AZURE_SUBSCRIPTION_ID": "your-subscription-id",
+    "AZURE_FUNCTION_URL": "https://your-func-app.azurewebsites.net"
   },
   "ConnectionStrings": {
     "SqlDb": "Server=tcp:your-server.database.windows.net,1433;Initial Catalog=your-db;User ID=your-user;Password=your-password;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"

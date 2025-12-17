@@ -1,0 +1,13 @@
+﻿Question 1: What is photosynthesis?
+Answer: Photosynthesis is the process by which plants convert light energy, usually from the sun, into chemical energy in the form of glucose. The process takes place in the chloroplasts and uses carbon dioxide from the air and water from the soil. The chemical equation is: 6CO2 + 6H2O + light energy -> C6H12O6 + 6O2
+
+Question 2: Explain Newton's three laws of motion.
+Answer:
+First Law (Inertia): An object at rest stays at rest and an object in motion stays in motion with the same speed and direction unless acted upon by an external force.
+
+Second Law: Force equals mass times acceleration (F = ma). The acceleration of an object depends on the mass of the object and the force applied.
+
+Third Law: For every action, there is an equal and opposite reaction.
+
+Question 3: What is the water cycle?
+Answer: The water cycle describes how water evaporates from the surface of the earth, rises into the atmosphere, cools and condenses into clouds, and falls back to the surface as precipitation. This continuous movement includes evaporation, condensation, precipitation, and collection.

@@ -85,7 +85,7 @@ namespace SmartStudyFunc.Functions
                 byte[] topicEmbedding;
                 try
                 {
-                    topicEmbedding = await _embeddingService.CreateEmbedding(topic);
+                    topicEmbedding = await _embeddingService.CreateEmbedding(topic, CancellationToken.None);
                     _logger.LogInformation("Created embedding for topic ({Size} bytes)", topicEmbedding.Length);
                 }
                 catch (Exception ex)

@@ -62,12 +62,21 @@ var host = new HostBuilder()
         // Written Answer Processing Services
         // ========================================
 
-        // Register Azure OpenAI Client
+        // Register Azure OpenAI Client with reasonable timeout
         services.AddSingleton(sp =>
         {
             var endpoint = configuration["AzureOpenAI:Endpoint"];
             var apiKey = configuration["AzureOpenAI:ApiKey"];
-            return new OpenAIClient(new Uri(endpoint!), new AzureKeyCredential(apiKey!));
+            
+            var options = new OpenAIClientOptions
+            {
+                Retry = {
+                    MaxRetries = 3,
+                    NetworkTimeout = TimeSpan.FromSeconds(60) // 60s network timeout for AI calls
+                }
+            };
+            
+            return new OpenAIClient(new Uri(endpoint!), new AzureKeyCredential(apiKey!), options);
         });
 
         // Note: Google Cloud Vision client registration is not needed when using API Key auth.

@@ -128,8 +128,9 @@ namespace SmartStudyFunc.Services
         /// Uses Azure OpenAI if configured, otherwise falls back to fake embeddings.
         /// </summary>
         /// <param name="text">Text to create embedding for</param>
+        /// <param name="cancellationToken">Cancellation token to abort the operation</param>
         /// <returns>Byte array representation of the embedding vector</returns>
-        public async Task<byte[]> CreateEmbedding(string text)
+        public async Task<byte[]> CreateEmbedding(string text, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(text))
             {
@@ -141,7 +142,7 @@ namespace SmartStudyFunc.Services
             {
                 try
                 {
-                    return await CreateRealEmbedding(text);
+                    return await CreateRealEmbedding(text, cancellationToken);
                 }
                 catch (Exception ex)
                 {
@@ -154,7 +155,7 @@ namespace SmartStudyFunc.Services
             return await CreateFakeEmbedding(text);
         }
 
-        private async Task<byte[]> CreateRealEmbedding(string text)
+        private async Task<byte[]> CreateRealEmbedding(string text, CancellationToken cancellationToken)
         {
             const int maxRetries = 3;
             const int retryDelayMs = 2000; // Increased from 1000ms
@@ -166,8 +167,9 @@ namespace SmartStudyFunc.Services
                 {
                     _logger.LogDebug("Requesting embedding from Azure OpenAI (attempt {Attempt}/{Max})", attempt, maxRetries);
 
-                    // Add timeout protection for OpenAI calls
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
+                    // Combine caller's token with timeout - caller can cancel, or 30s timeout
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
                     
                     var options = new EmbeddingsOptions(_embeddingDeployment!, new[] { text });
                     Response<Embeddings> response = await _openAiClient!.GetEmbeddingsAsync(options, cts.Token);
@@ -193,21 +195,21 @@ namespace SmartStudyFunc.Services
                     _logger.LogWarning(
                         "Timeout on embedding request (attempt {Attempt}/{Max}, timeout: {Timeout}s). Retrying...",
                         attempt, maxRetries, timeoutSeconds);
-                    await Task.Delay(retryDelayMs * attempt);
+                    await Task.Delay(retryDelayMs * attempt, CancellationToken.None); // Don't cancel the delay
                 }
                 catch (RequestFailedException ex) when (IsTransientError(ex) && attempt < maxRetries)
                 {
                     _logger.LogWarning(
                         "Transient error on embedding request (attempt {Attempt}/{Max}): Status={Status}, Message={Message}",
                         attempt, maxRetries, ex.Status, ex.Message);
-                    await Task.Delay(retryDelayMs * attempt);
+                    await Task.Delay(retryDelayMs * attempt, CancellationToken.None);
                 }
                 catch (Exception ex) when (attempt < maxRetries)
                 {
                     _logger.LogWarning(ex,
                         "Unexpected error on embedding request (attempt {Attempt}/{Max}). Retrying...",
                         attempt, maxRetries);
-                    await Task.Delay(retryDelayMs * attempt);
+                    await Task.Delay(retryDelayMs * attempt, CancellationToken.None);
                 }
             }
 

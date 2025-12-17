@@ -285,6 +285,39 @@ namespace SmartStudyFunc.Services
             string examId,
             CancellationToken cancellationToken = default)
         {
+            var questions = new List<ExamQuestionWithRubric>();
+
+            // First try ExamQuestions table (legacy/manual questions)
+            questions = await GetQuestionsFromExamQuestionsTableAsync(examId, cancellationToken);
+            
+            if (questions.Count > 0)
+            {
+                _logger.LogInformation("Found {Count} questions in ExamQuestions table for exam {ExamId}", 
+                    questions.Count, examId);
+                return questions;
+            }
+
+            // Fallback to GeneratedExams table (AI-generated exams from backend)
+            _logger.LogInformation("No questions in ExamQuestions table, checking GeneratedExams for {ExamId}", examId);
+            questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
+            
+            if (questions.Count > 0)
+            {
+                _logger.LogInformation("Found {Count} questions in GeneratedExams table for exam {ExamId}", 
+                    questions.Count, examId);
+            }
+            else
+            {
+                _logger.LogWarning("No questions found in either table for exam {ExamId}", examId);
+            }
+
+            return questions;
+        }
+
+        private async Task<List<ExamQuestionWithRubric>> GetQuestionsFromExamQuestionsTableAsync(
+            string examId,
+            CancellationToken cancellationToken)
+        {
             const string sql = @"
                 SELECT q.Id, q.QuestionNumber, q.QuestionText, q.ModelAnswer,
                        q.MaxScore, q.Rubric, q.Keywords,
@@ -299,6 +332,7 @@ namespace SmartStudyFunc.Services
             await connection.OpenAsync(cancellationToken);
 
             await using var command = new SqlCommand(sql, connection);
+            command.CommandTimeout = 30;
             command.Parameters.AddWithValue("@ExamId", examId);
 
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -323,6 +357,137 @@ namespace SmartStudyFunc.Services
             }
 
             return questions;
+        }
+
+        private async Task<List<ExamQuestionWithRubric>> GetQuestionsFromGeneratedExamsTableAsync(
+            string examId,
+            CancellationToken cancellationToken)
+        {
+            const string sql = @"
+                SELECT ExamContentJson, Subject, Grade, Chapter
+                FROM GeneratedExams
+                WHERE ExamId = @ExamId AND IsActive = 1";
+
+            var questions = new List<ExamQuestionWithRubric>();
+
+            await using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync(cancellationToken);
+
+            await using var command = new SqlCommand(sql, connection);
+            command.CommandTimeout = 30;
+            command.Parameters.AddWithValue("@ExamId", examId);
+
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                var examContentJson = reader.GetString(0);
+                var subject = reader.IsDBNull(1) ? null : reader.GetString(1);
+                var grade = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var chapter = reader.IsDBNull(3) ? null : reader.GetString(3);
+
+                // Parse the JSON content
+                try
+                {
+                    using var doc = JsonDocument.Parse(examContentJson);
+                    var root = doc.RootElement;
+
+                    // Check if exam has "parts" structure (multi-part exam)
+                    if (root.TryGetProperty("parts", out var partsElement))
+                    {
+                        foreach (var part in partsElement.EnumerateArray())
+                        {
+                            var partName = part.TryGetProperty("partName", out var pn) ? pn.GetString() : "";
+                            var marksPerQuestion = part.TryGetProperty("marksPerQuestion", out var mpq) ? mpq.GetInt32() : 1;
+                            
+                            if (part.TryGetProperty("questions", out var questionsElement))
+                            {
+                                foreach (var q in questionsElement.EnumerateArray())
+                                {
+                                    var question = ParseQuestionFromJson(q, subject, grade, chapter, marksPerQuestion);
+                                    if (question != null)
+                                    {
+                                        questions.Add(question);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Check if exam has flat "questions" array
+                    else if (root.TryGetProperty("questions", out var questionsElement))
+                    {
+                        foreach (var q in questionsElement.EnumerateArray())
+                        {
+                            var question = ParseQuestionFromJson(q, subject, grade, chapter, defaultMarks: 5);
+                            if (question != null)
+                            {
+                                questions.Add(question);
+                            }
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogError(ex, "Failed to parse ExamContentJson for exam {ExamId}", examId);
+                }
+            }
+
+            return questions;
+        }
+
+        private ExamQuestionWithRubric? ParseQuestionFromJson(
+            JsonElement q, 
+            string? subject, 
+            string? grade, 
+            string? chapter,
+            int defaultMarks)
+        {
+            try
+            {
+                var questionId = q.TryGetProperty("questionId", out var qid) ? qid.GetString() ?? "" : Guid.NewGuid().ToString();
+                var questionNumber = q.TryGetProperty("questionNumber", out var qn) ? qn.GetInt32() : 0;
+                var questionText = q.TryGetProperty("questionText", out var qt) ? qt.GetString() ?? "" : "";
+                var correctAnswer = q.TryGetProperty("correctAnswer", out var ca) ? ca.GetString() ?? "" : "";
+                var topic = q.TryGetProperty("topic", out var t) ? t.GetString() ?? "" : "";
+                var marks = q.TryGetProperty("marks", out var m) ? m.GetInt32() : defaultMarks;
+
+                // Skip if no question text
+                if (string.IsNullOrWhiteSpace(questionText))
+                {
+                    return null;
+                }
+
+                // Build rubric from topic if available
+                var rubric = !string.IsNullOrEmpty(topic) 
+                    ? $"Topic: {topic}. Evaluate based on correct answer and understanding of concepts."
+                    : "Evaluate based on correct answer and understanding of concepts.";
+
+                // Extract keywords from topic and answer
+                var keywords = new List<string>();
+                if (!string.IsNullOrEmpty(topic))
+                {
+                    keywords.Add(topic);
+                }
+
+                return new ExamQuestionWithRubric
+                {
+                    QuestionId = questionId,
+                    QuestionNumber = questionNumber,
+                    QuestionText = questionText,
+                    ModelAnswer = correctAnswer,
+                    MaxScore = marks,
+                    Rubric = rubric,
+                    Keywords = keywords,
+                    ClassName = grade,
+                    Subject = subject,
+                    Chapter = chapter ?? topic
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse question from JSON");
+                return null;
+            }
         }
 
         public async Task<List<WrittenSubmission>> GetOldSubmissionsAsync(

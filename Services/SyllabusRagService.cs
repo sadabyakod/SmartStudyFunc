@@ -103,7 +103,7 @@ namespace SmartStudyFunc.Services
                 byte[] questionEmbedding;
                 try
                 {
-                    questionEmbedding = await _embeddingService.CreateEmbedding(questionText);
+                    questionEmbedding = await _embeddingService.CreateEmbedding(questionText, cancellationToken);
                     _logger.LogWarning("[RAG-EMBED] Embedding created successfully");
                 }
                 catch (Exception ex)

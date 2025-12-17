@@ -108,10 +108,10 @@ namespace SmartStudyFunc.Functions
                 // Format: students-answer-sheets/{examId}/{studentId}/{timestamp}_{guid}.{ext}
                 var submissionId = Guid.NewGuid();
                 var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-                var blobName = $"students-answer-sheets/{examId}/{studentId}/{timestamp}_{submissionId}{extension}";
+                var blobName = $"{examId}/{studentId}/{timestamp}_{submissionId}{extension}";
 
-                // Upload to blob storage
-                var containerClient = _blobServiceClient.GetBlobContainerClient("student-answers");
+                // Upload to blob storage - using students-answer-sheets container
+                var containerClient = _blobServiceClient.GetBlobContainerClient("students-answer-sheets");
                 await containerClient.CreateIfNotExistsAsync(cancellationToken: ct);
 
                 var blobClient = containerClient.GetBlobClient(blobName);

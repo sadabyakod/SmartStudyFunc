@@ -447,11 +447,35 @@ namespace SmartStudyFunc.Services
 
         private static (string containerName, string blobName) ParseBlobPath(string blobPath)
         {
-            // Expected format: "container-name/path/to/blob.ext" or just blob path
-            // If path doesn't start with a known container prefix, assume it's in student-answers container
+            // Handle full Azure Blob URLs like:
+            // https://stsmartstudydev.blob.core.windows.net/students-answer-sheets/path/to/blob.ext
+            if (blobPath.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+                blobPath.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var uri = new Uri(blobPath);
+                    // Path will be like /students-answer-sheets/path/to/blob.ext
+                    var pathParts = uri.AbsolutePath.TrimStart('/').Split('/', 2);
+                    if (pathParts.Length == 2)
+                    {
+                        return (pathParts[0], pathParts[1]);
+                    }
+                    // Single segment - treat as blob name in default container
+                    return ("students-answer-sheets", pathParts[0]);
+                }
+                catch
+                {
+                    // Fall through to relative path handling
+                }
+            }
             
-            // Check if path starts with a container name followed by slash
-            if (blobPath.StartsWith("student-answers/", StringComparison.OrdinalIgnoreCase))
+            // Handle relative paths: "container-name/path/to/blob.ext"
+            if (blobPath.StartsWith("students-answer-sheets/", StringComparison.OrdinalIgnoreCase))
+            {
+                return ("students-answer-sheets", blobPath.Substring("students-answer-sheets/".Length));
+            }
+            else if (blobPath.StartsWith("student-answers/", StringComparison.OrdinalIgnoreCase))
             {
                 return ("student-answers", blobPath.Substring("student-answers/".Length));
             }
@@ -460,8 +484,8 @@ namespace SmartStudyFunc.Services
                 return ("written-answers", blobPath.Substring("written-answers/".Length));
             }
             
-            // Default: entire path is blob name in student-answers container
-            return ("student-answers", blobPath);
+            // Default: entire path is blob name in students-answer-sheets container
+            return ("students-answer-sheets", blobPath);
         }
     }
 

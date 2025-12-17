@@ -126,9 +126,9 @@ namespace SmartStudyFunc.Functions
                 // IDEMPOTENCY CHECK 2: Already evaluating (another instance may be processing)
                 if (submission.Status == WrittenSubmissionStatus.Evaluating)
                 {
-                    // Check if evaluation started recently (within 10 minutes) - if so, skip
+                    // Check if evaluation started recently (within 3 minutes) - if so, skip
                     if (submission.EvaluationStartedAt.HasValue && 
-                        (DateTime.UtcNow - submission.EvaluationStartedAt.Value).TotalMinutes < 10)
+                        (DateTime.UtcNow - submission.EvaluationStartedAt.Value).TotalMinutes < 3)
                     {
                         _logger.LogInformation(
                             "[QUEUE_RECEIVED] SubmissionId={SubmissionId} is Evaluating (started {Minutes:F1}m ago). Skipping.",
@@ -137,8 +137,8 @@ namespace SmartStudyFunc.Functions
                     }
                     // Otherwise, evaluation may have stalled - allow retry
                     _logger.LogWarning(
-                        "[QUEUE_RECEIVED] SubmissionId={SubmissionId} was Evaluating but stalled. Reprocessing.",
-                        submissionId);
+                        "[QUEUE_RECEIVED] SubmissionId={SubmissionId} was Evaluating but stalled for {Minutes:F1}m. Reprocessing.",
+                        submissionId, (DateTime.UtcNow - submission.EvaluationStartedAt.Value).TotalMinutes);
                 }
 
                 // IDEMPOTENCY CHECK 3: Max retries exceeded
@@ -231,8 +231,16 @@ namespace SmartStudyFunc.Functions
                     cancellationToken: cancellationToken);
 
                 // Fetch exam questions with rubrics
+                _logger.LogWarning(
+                    "[FETCH-QUESTIONS] SubmissionId={SubmissionId}, ExamId={ExamId} - Fetching questions from database...",
+                    submissionId, examId);
+                    
                 var questions = await _repository.GetExamQuestionsWithRubricsAsync(
                     examId, cancellationToken);
+
+                _logger.LogWarning(
+                    "[FETCH-QUESTIONS] SubmissionId={SubmissionId} - Retrieved {QuestionCount} questions",
+                    submissionId, questions.Count);
 
                 if (questions.Count == 0)
                 {
@@ -256,15 +264,36 @@ namespace SmartStudyFunc.Functions
                     "[PROCESS-EVAL] === CALLING EVALUATION SERVICE === SubmissionId={SubmissionId}, Questions={QuestionCount}",
                     submissionId, questions.Count);
                 
-                var evaluationResult = await _evaluationService.EvaluateSubmissionAsync(
-                    submission,
-                    extractedText,
-                    questions,
-                    cancellationToken);
+                // Hard timeout for entire evaluation: 2 minutes max
+                using var evaluationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                evaluationCts.CancelAfter(TimeSpan.FromMinutes(2));
+                
+                WrittenEvaluationResult evaluationResult;
+                try
+                {
+                    evaluationResult = await _evaluationService.EvaluateSubmissionAsync(
+                        submission,
+                        extractedText,
+                        questions,
+                        evaluationCts.Token);
 
-                _logger.LogWarning(
-                    "[PROCESS-EVAL] === EVALUATION SERVICE RETURNED === SubmissionId={SubmissionId}, TotalScore={Score}",
-                    submissionId, evaluationResult.TotalScore);
+                    _logger.LogWarning(
+                        "[PROCESS-EVAL] === EVALUATION SERVICE RETURNED === SubmissionId={SubmissionId}, TotalScore={Score}",
+                        submissionId, evaluationResult.TotalScore);
+                }
+                catch (OperationCanceledException) when (evaluationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogError(
+                        "[PROCESS-EVAL] === EVALUATION TIMEOUT === SubmissionId={SubmissionId} - Evaluation exceeded 2 minutes. This is likely due to missing exam questions or database issues.",
+                        submissionId);
+                    
+                    await _repository.UpdateStatusAsync(
+                        submissionId,
+                        WrittenSubmissionStatus.Failed,
+                        "Evaluation timeout after 2 minutes. Check if exam questions exist in database.",
+                        cancellationToken);
+                    return;
+                }
 
                 evalStopwatch.Stop();
 
