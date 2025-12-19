@@ -1,0 +1,47 @@
+-- ================================================================
+-- QUICK FIX: Insert Sample Exam Questions for SAMPLE-EXAM-001
+-- ================================================================
+-- Run this in Azure Portal Query Editor or Azure Data Studio
+-- ================================================================
+
+-- Clean up existing questions
+DELETE FROM ExamQuestions WHERE ExamId = 'SAMPLE-EXAM-001';
+
+-- Question 1: Photosynthesis (20 points)
+INSERT INTO ExamQuestions (Id, ExamId, QuestionNumber, QuestionText, ModelAnswer, MaxScore, Rubric, Keywords, ClassName, Subject, Chapter)
+VALUES (
+    NEWID(), 'SAMPLE-EXAM-001', 1,
+    'Explain the process of photosynthesis in plants. Include the role of chlorophyll and the chemical equation.',
+    'Photosynthesis is the process by which green plants convert light energy into chemical energy. Chlorophyll in chloroplasts absorbs sunlight. Carbon dioxide from air and water from soil are converted into glucose and oxygen. The equation is: 6CO2 + 6H2O + Light Energy → C6H12O6 + 6O2. This process occurs in two stages: light-dependent reactions (in thylakoids) and light-independent reactions or Calvin cycle (in stroma).',
+    20.0,
+    'Award 4 marks for explaining the basic process. Award 3 marks for mentioning chlorophyll role. Award 4 marks for correct chemical equation. Award 3 marks for mentioning light and dark reactions. Award 3 marks for location details (chloroplasts). Award 3 marks for explaining inputs/outputs.',
+    '["photosynthesis", "chlorophyll", "carbon dioxide", "glucose", "oxygen", "light energy", "chloroplasts", "Calvin cycle", "thylakoids", "stroma"]',
+    'Class 10', 'Biology', 'Life Processes'
+);
+
+-- Question 2: Newton's First Law (15 points)
+INSERT INTO ExamQuestions (Id, ExamId, QuestionNumber, QuestionText, ModelAnswer, MaxScore, Rubric, Keywords, ClassName, Subject, Chapter)
+VALUES (
+    NEWID(), 'SAMPLE-EXAM-001', 2,
+    'State Newton''s First Law of Motion and explain it with an example.',
+    'Newton''s First Law of Motion states that an object at rest stays at rest and an object in motion stays in motion with the same speed and direction unless acted upon by an unbalanced external force. This is also called the law of inertia. Example: A passenger in a moving bus jerks forward when the bus suddenly stops because the passenger''s body tends to continue in motion due to inertia while the bus comes to rest.',
+    15.0,
+    'Award 5 marks for correct statement of the law. Award 3 marks for mentioning inertia. Award 4 marks for a relevant example. Award 3 marks for explaining the example correctly.',
+    '["Newton''s First Law", "inertia", "motion", "rest", "force", "unbalanced force", "law of inertia"]',
+    'Class 10', 'Physics', 'Force and Laws of Motion'
+);
+
+-- Question 3: Water Cycle (15 points)
+INSERT INTO ExamQuestions (Id, ExamId, QuestionNumber, QuestionText, ModelAnswer, MaxScore, Rubric, Keywords, ClassName, Subject, Chapter)
+VALUES (
+    NEWID(), 'SAMPLE-EXAM-001', 3,
+    'Describe the water cycle and its importance for the environment.',
+    'The water cycle is the continuous circulation of water on Earth. Water evaporates from water bodies due to sun''s heat, forming water vapor. This vapor rises, cools, and condenses to form clouds. When clouds become heavy, water falls as precipitation (rain, snow, hail). This water flows back to rivers and oceans through runoff, or seeps into the ground as groundwater. The cycle is important for distributing fresh water, maintaining temperature, supporting plant growth, and sustaining all life forms.',
+    15.0,
+    'Award 3 marks for each major stage: evaporation (3), condensation (3), precipitation (3), collection/runoff (3). Award 3 marks for explaining environmental importance.',
+    '["water cycle", "evaporation", "condensation", "precipitation", "runoff", "groundwater", "clouds", "water vapor", "rain"]',
+    'Class 10', 'Geography', 'Water Resources'
+);
+
+-- Verify
+SELECT QuestionNumber, SUBSTRING(QuestionText, 1, 50) AS Question, MaxScore, Subject FROM ExamQuestions WHERE ExamId = 'SAMPLE-EXAM-001' ORDER BY QuestionNumber;

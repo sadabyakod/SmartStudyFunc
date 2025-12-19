@@ -7,11 +7,34 @@ secrets.json
 
 # Test files with potential secrets
 test-*.ps1
-!test-*.template.ps1
+check-*.ps1
+get-results.ps1
+reprocess-*.ps1
+requeue-*.ps1
+show-eval-results.ps1
+upgrade-to-basic-plan.ps1
+
+# Documentation with secrets
+NEXT_STEPS.md
+EVALUATION_FIX_GUIDE.md
+EVALUATION_HANGING_FIX.md
+PRODUCTION_TEST_REPORT.md
+check-evaluation-status.ps1
 
 # Logs
 logs/
 *.log
+
+# Zip files
+*.zip
+
+# Image files
+*.png
+*.jpg
+*.jpeg
+
+# Text data files
+*.txt
 
 # Build outputs
 bin/
