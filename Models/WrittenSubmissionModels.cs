@@ -93,6 +93,7 @@ namespace SmartStudyFunc.Models
         public Guid WrittenSubmissionId { get; set; }
         public string QuestionId { get; set; } = string.Empty;
         public int QuestionNumber { get; set; }
+        public string QuestionText { get; set; } = string.Empty;
         public string ExtractedAnswer { get; set; } = string.Empty;
         public string ModelAnswer { get; set; } = string.Empty;
         public decimal MaxScore { get; set; }
