@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+*.env
+local.settings.json
+*.secrets
+secrets.json
+
+# Test files with potential secrets
+test-*.ps1
+!test-*.template.ps1
+
+# Logs
+logs/
+*.log
+
+# Build outputs
+bin/
+obj/
+.vs/
+*.user
+
+# IDE
+.idea/
+.vscode/
+
+# Azure Functions
+local.settings.json
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+
+# Node modules (if any)
+node_modules/
