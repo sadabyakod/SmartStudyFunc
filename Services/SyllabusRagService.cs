@@ -40,7 +40,7 @@ namespace SmartStudyFunc.Services
         private readonly EmbeddingService _embeddingService;
         private readonly ILogger<SyllabusRagService> _logger;
 
-        private const int DefaultCommandTimeout = 120;
+        private const int DefaultCommandTimeout = 30; // Reduced from 120 for speed
 
         public SyllabusRagService(
             IConfiguration configuration,
@@ -53,10 +53,12 @@ namespace SmartStudyFunc.Services
 
             var builder = new SqlConnectionStringBuilder(connString)
             {
-                ConnectTimeout = 30,
+                ConnectTimeout = 15, // Reduced from 30
                 CommandTimeout = DefaultCommandTimeout,
-                ConnectRetryCount = 3,
-                Pooling = true
+                ConnectRetryCount = 2, // Reduced from 3
+                Pooling = true,
+                MinPoolSize = 5, // Keep connections warm
+                MaxPoolSize = 50
             };
             _connectionString = builder.ConnectionString;
 

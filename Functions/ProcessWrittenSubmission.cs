@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Linq;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -298,6 +299,19 @@ namespace SmartStudyFunc.Functions
                 evalStopwatch.Stop();
 
                 // ════════════════════════════════════════════════════════════════
+                // PHASE 4.5: Merge MCQ data from backend API (if present)
+                // ════════════════════════════════════════════════════════════════
+                if (submission.McqAnswers != null || submission.McqScore.HasValue)
+                {
+                    _logger.LogInformation(
+                        "[MCQ_MERGE] SubmissionId={SubmissionId}, McqScore={McqScore}, McqTotalMarks={McqTotalMarks}",
+                        submissionId, submission.McqScore, submission.McqTotalMarks);
+                    
+                    // Add MCQ data from database to evaluation result
+                    MergeMcqDataIntoEvaluationResult(submission, evaluationResult);
+                }
+
+                // ════════════════════════════════════════════════════════════════
                 // PHASE 5: Save Results to Blob Storage (Required for Completion)
                 // ════════════════════════════════════════════════════════════════
                 string? resultBlobPath = null;
@@ -573,6 +587,218 @@ namespace SmartStudyFunc.Functions
             await blobClient.UploadAsync(stream, uploadOptions, cancellationToken: cancellationToken);
 
             return $"{containerName}/{blobPath}";
+        }
+
+        /// <summary>
+        /// Merges MCQ data from the database (populated by backend API) into the evaluation result.
+        /// MCQ questions are evaluated by the backend and stored in WrittenSubmissions table.
+        /// This method adds that data to the evaluation result blob.
+        /// </summary>
+        private void MergeMcqDataIntoEvaluationResult(
+            WrittenSubmission submission,
+            WrittenEvaluationResult evaluationResult)
+        {
+            // Parse MCQ answers JSON if present
+            if (!string.IsNullOrEmpty(submission.McqAnswers))
+            {
+                try
+                {
+                    var mcqData = JsonSerializer.Deserialize<JsonElement>(submission.McqAnswers);
+                    
+                    // If McqAnswers contains questionEvaluations array, merge them
+                    if (mcqData.ValueKind == JsonValueKind.Object && 
+                        mcqData.TryGetProperty("questionEvaluations", out var questionsElement))
+                    {
+                        foreach (var q in questionsElement.EnumerateArray())
+                        {
+                            var questionNumber = q.TryGetProperty("questionNumber", out var qn) ? qn.GetInt32() : 0;
+                            var questionId = q.TryGetProperty("questionId", out var qid) ? qid.GetString() ?? "" : "";
+                            var questionText = q.TryGetProperty("questionText", out var qt) ? qt.GetString() ?? "" : "";
+                            var extractedAnswer = q.TryGetProperty("extractedAnswer", out var ea) ? ea.GetString() ?? "" : "";
+                            var modelAnswer = q.TryGetProperty("modelAnswer", out var ma) ? ma.GetString() ?? "" : "";
+                            var awardedScore = q.TryGetProperty("awardedScore", out var aw) ? aw.GetDecimal() : 0;
+                            var maxScore = q.TryGetProperty("maxScore", out var ms) ? ms.GetDecimal() : 0;
+                            var feedback = q.TryGetProperty("feedback", out var fb) ? fb.GetString() ?? "" : "";
+                            var isCorrect = awardedScore == maxScore;
+                            
+                            // Use feedback from database, or generate if not present
+                            if (string.IsNullOrEmpty(feedback))
+                            {
+                                feedback = isCorrect ? "Correct!" : $"Incorrect. Correct answer: {modelAnswer}";
+                            }
+                            
+                            // Check if this question already exists in evaluation result
+                            var existingEval = evaluationResult.QuestionEvaluations
+                                .Find(e => e.QuestionNumber == questionNumber || e.QuestionId == questionId);
+                            
+                            if (existingEval != null)
+                            {
+                                // UPDATE existing evaluation with MCQ data from database
+                                existingEval.ExtractedAnswer = extractedAnswer;
+                                existingEval.ModelAnswer = modelAnswer;
+                                existingEval.AwardedScore = awardedScore;
+                                existingEval.MaxScore = maxScore;
+                                existingEval.Feedback = feedback;
+                                existingEval.RubricBreakdown = ""; // No rubric for MCQ
+                                existingEval.IsMcq = true;
+                                existingEval.EvaluatedAt = DateTime.UtcNow;
+                                
+                                _logger.LogInformation(
+                                    "[MCQ_UPDATE] Q{QuestionNumber}: Updated with DB data - Answer={Answer}, Score={Score}/{Max}",
+                                    questionNumber, extractedAnswer, awardedScore, maxScore);
+                            }
+                            else
+                            {
+                                // Add new MCQ evaluation (no rubricBreakdown for MCQ)
+                                evaluationResult.QuestionEvaluations.Add(new WrittenQuestionEvaluation
+                                {
+                                    Id = Guid.NewGuid(),
+                                    WrittenSubmissionId = submission.Id,
+                                    QuestionId = questionId,
+                                    QuestionNumber = questionNumber,
+                                    QuestionText = questionText,
+                                    ExtractedAnswer = extractedAnswer,
+                                    ModelAnswer = modelAnswer,
+                                    MaxScore = maxScore,
+                                    AwardedScore = awardedScore,
+                                    Feedback = feedback,
+                                    RubricBreakdown = "", // No rubric breakdown for MCQ
+                                    EvaluatedAt = DateTime.UtcNow,
+                                    IsMcq = true
+                                });
+                                
+                                _logger.LogInformation(
+                                    "[MCQ_ADD] Q{QuestionNumber}: Added from DB - Answer={Answer}, Score={Score}/{Max}",
+                                    questionNumber, extractedAnswer, awardedScore, maxScore);
+                            }
+                        }
+                    }
+                    // If McqAnswers is just an array of evaluations
+                    else if (mcqData.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var q in mcqData.EnumerateArray())
+                        {
+                            var questionNumber = q.TryGetProperty("questionNumber", out var qn) ? qn.GetInt32() : 0;
+                            var questionId = q.TryGetProperty("questionId", out var qid) ? qid.GetString() ?? "" : "";
+                            var questionText = q.TryGetProperty("questionText", out var qt) ? qt.GetString() ?? "" : "";
+                            var extractedAnswer = q.TryGetProperty("extractedAnswer", out var ea) ? ea.GetString() ?? "" : 
+                                                  q.TryGetProperty("studentAnswer", out var sa) ? sa.GetString() ?? "" : "";
+                            var modelAnswer = q.TryGetProperty("modelAnswer", out var ma) ? ma.GetString() ?? "" :
+                                              q.TryGetProperty("correctAnswer", out var ca) ? ca.GetString() ?? "" : "";
+                            var awardedScore = q.TryGetProperty("awardedScore", out var aw) ? aw.GetDecimal() : 
+                                               q.TryGetProperty("score", out var sc) ? sc.GetDecimal() : 0;
+                            var maxScore = q.TryGetProperty("maxScore", out var ms) ? ms.GetDecimal() : 
+                                           q.TryGetProperty("maxMarks", out var mm) ? mm.GetDecimal() : 1;
+                            var feedback = q.TryGetProperty("feedback", out var fb) ? fb.GetString() ?? "" : "";
+                            var isCorrect = awardedScore == maxScore;
+                            
+                            // Use feedback from database, or generate if not present
+                            if (string.IsNullOrEmpty(feedback))
+                            {
+                                feedback = isCorrect ? "Correct!" : $"Incorrect. Correct answer: {modelAnswer}";
+                            }
+                            
+                            var existingEval = evaluationResult.QuestionEvaluations
+                                .Find(e => e.QuestionNumber == questionNumber || e.QuestionId == questionId);
+                            
+                            if (existingEval != null)
+                            {
+                                // UPDATE existing evaluation with MCQ data from database
+                                existingEval.ExtractedAnswer = extractedAnswer;
+                                existingEval.ModelAnswer = modelAnswer;
+                                existingEval.AwardedScore = awardedScore;
+                                existingEval.MaxScore = maxScore;
+                                existingEval.Feedback = feedback;
+                                existingEval.RubricBreakdown = ""; // No rubric for MCQ
+                                existingEval.IsMcq = true;
+                                existingEval.EvaluatedAt = DateTime.UtcNow;
+                                
+                                _logger.LogInformation(
+                                    "[MCQ_UPDATE_ARR] Q{QuestionNumber}: Updated - Answer={Answer}, Score={Score}/{Max}",
+                                    questionNumber, extractedAnswer, awardedScore, maxScore);
+                            }
+                            else
+                            {
+                                evaluationResult.QuestionEvaluations.Add(new WrittenQuestionEvaluation
+                                {
+                                    Id = Guid.NewGuid(),
+                                    WrittenSubmissionId = submission.Id,
+                                    QuestionId = questionId,
+                                    QuestionNumber = questionNumber,
+                                    QuestionText = questionText,
+                                    ExtractedAnswer = extractedAnswer,
+                                    ModelAnswer = modelAnswer,
+                                    MaxScore = maxScore,
+                                    AwardedScore = awardedScore,
+                                    Feedback = feedback,
+                                    RubricBreakdown = "", // No rubric breakdown for MCQ
+                                    EvaluatedAt = DateTime.UtcNow,
+                                    IsMcq = true
+                                });
+                                
+                                _logger.LogInformation(
+                                    "[MCQ_ADD_ARR] Q{QuestionNumber}: Added - Answer={Answer}, Score={Score}/{Max}",
+                                    questionNumber, extractedAnswer, awardedScore, maxScore);
+                            }
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(ex, 
+                        "[MCQ_MERGE] Failed to parse McqAnswers JSON for SubmissionId={SubmissionId}",
+                        submission.Id);
+                }
+            }
+
+            // Update MCQ scores from database values
+            if (submission.McqScore.HasValue)
+            {
+                evaluationResult.McqScore = submission.McqScore.Value;
+            }
+            if (submission.McqTotalMarks.HasValue)
+            {
+                evaluationResult.McqMaxScore = submission.McqTotalMarks.Value;
+            }
+            
+            // Recalculate MCQ count from question evaluations
+            var mcqCount = evaluationResult.QuestionEvaluations.Count(e => e.IsMcq);
+            if (mcqCount > 0)
+            {
+                evaluationResult.McqCount = mcqCount;
+            }
+
+            // Recalculate totals if MCQ data was added
+            if (submission.McqScore.HasValue || submission.McqTotalMarks.HasValue)
+            {
+                // Recalculate total score including MCQ
+                evaluationResult.TotalScore = evaluationResult.QuestionEvaluations.Sum(e => e.AwardedScore);
+                evaluationResult.MaxPossibleScore = evaluationResult.QuestionEvaluations.Sum(e => e.MaxScore);
+                
+                if (evaluationResult.MaxPossibleScore > 0)
+                {
+                    evaluationResult.Percentage = Math.Round(
+                        (evaluationResult.TotalScore / evaluationResult.MaxPossibleScore) * 100, 2);
+                }
+                
+                // Recalculate subjective scores
+                var subjectiveEvals = evaluationResult.QuestionEvaluations.Where(e => !e.IsMcq).ToList();
+                evaluationResult.SubjectiveScore = subjectiveEvals.Sum(e => e.AwardedScore);
+                evaluationResult.SubjectiveMaxScore = subjectiveEvals.Sum(e => e.MaxScore);
+                evaluationResult.SubjectiveCount = subjectiveEvals.Count;
+            }
+
+            // Sort question evaluations by question number
+            evaluationResult.QuestionEvaluations = evaluationResult.QuestionEvaluations
+                .OrderBy(e => e.QuestionNumber)
+                .ToList();
+
+            _logger.LogInformation(
+                "[MCQ_MERGE_COMPLETE] SubmissionId={SubmissionId}, McqScore={McqScore}/{McqMax}, SubjScore={SubjScore}/{SubjMax}, Total={Total}/{Max}",
+                submission.Id, 
+                evaluationResult.McqScore, evaluationResult.McqMaxScore,
+                evaluationResult.SubjectiveScore, evaluationResult.SubjectiveMaxScore,
+                evaluationResult.TotalScore, evaluationResult.MaxPossibleScore);
         }
     }
 }

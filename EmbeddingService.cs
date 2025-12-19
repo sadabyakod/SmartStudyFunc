@@ -32,8 +32,8 @@ namespace SmartStudyFunc
             if (string.IsNullOrWhiteSpace(text))
                 text = ".";
 
-            int maxRetries = 3;
-            int retryDelayMs = 1000;
+            int maxRetries = 2; // Reduced from 3 for faster failure
+            int retryDelayMs = 500; // Reduced from 1000
 
             for (int attempt = 0; attempt <= maxRetries; attempt++)
             {
@@ -52,7 +52,7 @@ namespace SmartStudyFunc
                 }
                 catch (RequestFailedException ex) when (ex.Status == 429 && attempt < maxRetries)
                 {
-                    // Rate limit hit, wait and retry with exponential backoff
+                    // Rate limit hit, wait and retry with shorter backoff
                     int delay = retryDelayMs * (int)Math.Pow(2, attempt);
                     await Task.Delay(delay);
                     continue;
@@ -62,7 +62,7 @@ namespace SmartStudyFunc
                     if (attempt == maxRetries)
                         throw new InvalidOperationException($"Error generating embeddings after {maxRetries + 1} attempts: {ex.Message}", ex);
                     
-                    // For other transient errors, retry with delay
+                    // For other transient errors, retry with shorter delay
                     await Task.Delay(retryDelayMs * (attempt + 1));
                 }
             }

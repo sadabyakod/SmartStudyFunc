@@ -11,27 +11,21 @@
       "enablePerformanceCountersCollection": true
     },
     "logLevel": {
-      "default": "Information",
-      "Host": "Information",
+      "default": "Warning",
       "Function": "Information",
-      "Host.Results": "Information",
-      "Host.Aggregator": "Information",
       "Microsoft": "Warning",
-      "Microsoft.Hosting.Lifetime": "Information",
-      "Azure.Core": "Warning",
+      "Azure.Core": "Error",
       "Azure.Storage": "Warning",
-      "Azure.Storage.Blobs": "Warning",
-      "Azure.Storage.Queues": "Warning",
-      "Host.Triggers.BlobTrigger": "Information",
-      "SmartStudyFunc": "Information"
+      "Host.Results": "Information",
+      "Host.Aggregator": "Warning"
     }
   },
+
   "extensions": {
     "http": {
       "routePrefix": "api",
-      "maxConcurrentRequests": 5,
-      "maxOutstandingRequests": 50,
-      "routePrefix": "api",
+      "maxConcurrentRequests": 10,
+      "maxOutstandingRequests": 100,
       "dynamicThrottlesEnabled": false,
       "customHeaders": {
         "Access-Control-Allow-Origin": "*",
@@ -39,37 +33,45 @@
         "Access-Control-Allow-Headers": "Content-Type, Authorization"
       }
     },
+    "queues": {
+      "maxPollingInterval": "00:00:00.500",
+      "visibilityTimeout": "00:03:00",
+      "batchSize": 8,
+      "maxDequeueCount": 3,
+      "newBatchThreshold": 4
+    },
     "blobs": {
-      "maxDegreeOfParallelism": 1
+      "maxDegreeOfParallelism": 8
     }
   },
-  "functionTimeout": "00:15:00",
+
+  "functionTimeout": "00:05:00",
+
   "healthMonitor": {
     "enabled": true,
-    "healthCheckInterval": "00:00:10",
-    "healthCheckWindow": "00:02:00",
-    "healthCheckThreshold": 6,
-    "counterThreshold": 0.80
+    "healthCheckInterval": "00:01:00",
+    "healthCheckWindow": "00:05:00",
+    "healthCheckThreshold": 3
   },
+
   "singleton": {
-    "lockPeriod": "00:00:45",
-    "listenerLockPeriod": "00:01:30",
-    "listenerLockRecoveryPollingInterval": "00:01:00",
-    "lockAcquisitionTimeout": "00:03:00",
-    "lockAcquisitionPollingInterval": "00:00:05"
+    "lockPeriod": "00:00:15",
+    "listenerLockPeriod": "00:00:30",
+    "listenerLockRecoveryPollingInterval": "00:00:15",
+    "lockAcquisitionTimeout": "00:00:30",
+    "lockAcquisitionPollingInterval": "00:00:02"
   },
+
   "concurrency": {
-    "dynamicConcurrencyEnabled": false,
-    "maximumFunctionConcurrency": 2
+    "dynamicConcurrencyEnabled": true,
+    "maximumFunctionConcurrency": 16
   },
+
   "retry": {
     "strategy": "exponentialBackoff",
     "maxRetryCount": 3,
-    "minimumInterval": "00:00:03",
-    "maximumInterval": "00:01:00"
-  },
-  "aggregator": {
-    "batchSize": 1000,
-    "flushTimeout": "00:00:30"
+    "minimumInterval": "00:00:01",
+    "maximumInterval": "00:00:15"
   }
 }
+

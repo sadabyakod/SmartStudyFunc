@@ -82,6 +82,11 @@ namespace SmartStudyFunc.Models
         public int RetryCount { get; set; }
         public long? OcrProcessingTimeMs { get; set; }
         public long? EvaluationProcessingTimeMs { get; set; }
+        
+        // MCQ-specific columns (populated by backend API)
+        public string? McqAnswers { get; set; } // JSON array of MCQ answers from backend
+        public decimal? McqScore { get; set; }
+        public decimal? McqTotalMarks { get; set; }
     }
 
     /// <summary>
@@ -93,6 +98,7 @@ namespace SmartStudyFunc.Models
         public Guid WrittenSubmissionId { get; set; }
         public string QuestionId { get; set; } = string.Empty;
         public int QuestionNumber { get; set; }
+        public string QuestionText { get; set; } = string.Empty;
         public string ExtractedAnswer { get; set; } = string.Empty;
         public string ModelAnswer { get; set; } = string.Empty;
         public decimal MaxScore { get; set; }
@@ -100,6 +106,7 @@ namespace SmartStudyFunc.Models
         public string Feedback { get; set; } = string.Empty;
         public string RubricBreakdown { get; set; } = string.Empty;
         public DateTime EvaluatedAt { get; set; }
+        public bool IsMcq { get; set; }
     }
 
     /// <summary>
@@ -116,6 +123,14 @@ namespace SmartStudyFunc.Models
         public string Grade { get; set; } = string.Empty;
         public List<WrittenQuestionEvaluation> QuestionEvaluations { get; set; } = new();
         public DateTime EvaluatedAt { get; set; }
+        
+        // Separate scoring for MCQ and Subjective questions
+        public decimal McqScore { get; set; }
+        public decimal McqMaxScore { get; set; }
+        public decimal SubjectiveScore { get; set; }
+        public decimal SubjectiveMaxScore { get; set; }
+        public int McqCount { get; set; }
+        public int SubjectiveCount { get; set; }
     }
 
     /// <summary>
@@ -129,6 +144,8 @@ namespace SmartStudyFunc.Models
         public string ModelAnswer { get; set; } = string.Empty;
         public decimal MaxScore { get; set; }
         public string Rubric { get; set; } = string.Empty;
+        public bool IsMcq { get; set; }
+        public List<string> McqOptions { get; set; } = new();
         public List<string> Keywords { get; set; } = new();
         
         // Syllabus metadata for RAG lookup
@@ -250,5 +267,153 @@ namespace SmartStudyFunc.Models
         public string ChunkText { get; set; } = string.Empty;
         public string TopicTitle { get; set; } = string.Empty;
         public double Similarity { get; set; }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════════════
+    // UI RESPONSE MODELS - Formatted for mobile app consumption
+    // ════════════════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// MCQ result formatted for UI display
+    /// </summary>
+    public class McqResultDto
+    {
+        [JsonPropertyName("questionId")]
+        public string QuestionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("questionNumber")]
+        public int QuestionNumber { get; set; }
+
+        [JsonPropertyName("questionText")]
+        public string QuestionText { get; set; } = string.Empty;
+
+        [JsonPropertyName("selectedOption")]
+        public string SelectedOption { get; set; } = string.Empty;
+
+        [JsonPropertyName("correctAnswer")]
+        public string CorrectAnswer { get; set; } = string.Empty;
+
+        [JsonPropertyName("isCorrect")]
+        public bool IsCorrect { get; set; }
+
+        [JsonPropertyName("marksAwarded")]
+        public decimal MarksAwarded { get; set; }
+
+        [JsonPropertyName("maxMarks")]
+        public decimal MaxMarks { get; set; }
+
+        [JsonPropertyName("options")]
+        public List<string> Options { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Step analysis for subjective answer evaluation
+    /// </summary>
+    public class StepAnalysisDto
+    {
+        [JsonPropertyName("step")]
+        public int Step { get; set; }
+
+        [JsonPropertyName("description")]
+        public string Description { get; set; } = string.Empty;
+
+        [JsonPropertyName("isCorrect")]
+        public bool IsCorrect { get; set; }
+
+        [JsonPropertyName("marksAwarded")]
+        public decimal MarksAwarded { get; set; }
+
+        [JsonPropertyName("maxMarksForStep")]
+        public decimal MaxMarksForStep { get; set; }
+
+        [JsonPropertyName("feedback")]
+        public string Feedback { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Subjective result formatted for UI display
+    /// </summary>
+    public class SubjectiveResultDto
+    {
+        [JsonPropertyName("questionId")]
+        public string QuestionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("questionNumber")]
+        public int QuestionNumber { get; set; }
+
+        [JsonPropertyName("questionText")]
+        public string QuestionText { get; set; } = string.Empty;
+
+        [JsonPropertyName("earnedMarks")]
+        public decimal EarnedMarks { get; set; }
+
+        [JsonPropertyName("maxMarks")]
+        public decimal MaxMarks { get; set; }
+
+        [JsonPropertyName("isFullyCorrect")]
+        public bool IsFullyCorrect { get; set; }
+
+        [JsonPropertyName("expectedAnswer")]
+        public string ExpectedAnswer { get; set; } = string.Empty;
+
+        [JsonPropertyName("studentAnswerEcho")]
+        public string StudentAnswerEcho { get; set; } = string.Empty;
+
+        [JsonPropertyName("overallFeedback")]
+        public string OverallFeedback { get; set; } = string.Empty;
+
+        [JsonPropertyName("stepAnalysis")]
+        public List<StepAnalysisDto> StepAnalysis { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Complete evaluation response formatted for UI consumption
+    /// </summary>
+    public class EvaluationResultDto
+    {
+        [JsonPropertyName("examId")]
+        public string ExamId { get; set; } = string.Empty;
+
+        [JsonPropertyName("studentId")]
+        public string StudentId { get; set; } = string.Empty;
+
+        [JsonPropertyName("examTitle")]
+        public string ExamTitle { get; set; } = string.Empty;
+
+        [JsonPropertyName("mcqScore")]
+        public decimal McqScore { get; set; }
+
+        [JsonPropertyName("mcqTotalMarks")]
+        public decimal McqTotalMarks { get; set; }
+
+        [JsonPropertyName("mcqResults")]
+        public List<McqResultDto> McqResults { get; set; } = new();
+
+        [JsonPropertyName("subjectiveScore")]
+        public decimal SubjectiveScore { get; set; }
+
+        [JsonPropertyName("subjectiveTotalMarks")]
+        public decimal SubjectiveTotalMarks { get; set; }
+
+        [JsonPropertyName("subjectiveResults")]
+        public List<SubjectiveResultDto> SubjectiveResults { get; set; } = new();
+
+        [JsonPropertyName("grandScore")]
+        public decimal GrandScore { get; set; }
+
+        [JsonPropertyName("grandTotalMarks")]
+        public decimal GrandTotalMarks { get; set; }
+
+        [JsonPropertyName("percentage")]
+        public decimal Percentage { get; set; }
+
+        [JsonPropertyName("grade")]
+        public string Grade { get; set; } = string.Empty;
+
+        [JsonPropertyName("passed")]
+        public bool Passed { get; set; }
+
+        [JsonPropertyName("evaluatedAt")]
+        public DateTime EvaluatedAt { get; set; }
     }
 }

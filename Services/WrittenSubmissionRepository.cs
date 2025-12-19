@@ -72,7 +72,8 @@ namespace SmartStudyFunc.Services
                        TotalScore, MaxPossibleScore, Percentage, Grade,
                        ErrorMessage, SubmittedAt, OcrStartedAt, OcrCompletedAt,
                        EvaluationStartedAt, EvaluatedAt, RetryCount,
-                       OcrProcessingTimeMs, EvaluationProcessingTimeMs
+                       OcrProcessingTimeMs, EvaluationProcessingTimeMs,
+                       McqAnswers, McqScore, McqTotalMarks
                 FROM WrittenSubmissions
                 WHERE Id = @Id";
 
@@ -116,7 +117,11 @@ namespace SmartStudyFunc.Services
                 EvaluatedAt = reader.IsDBNull(17) ? null : reader.GetDateTime(17),
                 RetryCount = reader.GetInt32(18),
                 OcrProcessingTimeMs = reader.IsDBNull(19) ? null : reader.GetInt64(19),
-                EvaluationProcessingTimeMs = reader.IsDBNull(20) ? null : reader.GetInt64(20)
+                EvaluationProcessingTimeMs = reader.IsDBNull(20) ? null : reader.GetInt64(20),
+                // MCQ columns (may not exist in older databases)
+                McqAnswers = reader.FieldCount > 21 && !reader.IsDBNull(21) ? reader.GetString(21) : null,
+                McqScore = reader.FieldCount > 22 && !reader.IsDBNull(22) ? reader.GetDecimal(22) : null,
+                McqTotalMarks = reader.FieldCount > 23 && !reader.IsDBNull(23) ? reader.GetDecimal(23) : null
             };
         }
 
@@ -294,30 +299,18 @@ namespace SmartStudyFunc.Services
             string examId,
             CancellationToken cancellationToken = default)
         {
-            var questions = new List<ExamQuestionWithRubric>();
-
-            // First try ExamQuestions table (legacy/manual questions)
-            questions = await GetQuestionsFromExamQuestionsTableAsync(examId, cancellationToken);
+            // ONLY USE GeneratedExams table - never fallback to ExamQuestions
+            _logger.LogInformation("Loading questions from GeneratedExams table for exam {ExamId}", examId);
+            var questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
             
             if (questions.Count > 0)
             {
-                _logger.LogInformation("Found {Count} questions in ExamQuestions table for exam {ExamId}", 
-                    questions.Count, examId);
-                return questions;
-            }
-
-            // Fallback to GeneratedExams table (AI-generated exams from backend)
-            _logger.LogInformation("No questions in ExamQuestions table, checking GeneratedExams for {ExamId}", examId);
-            questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
-            
-            if (questions.Count > 0)
-            {
-                _logger.LogInformation("Found {Count} questions in GeneratedExams table for exam {ExamId}", 
+                _logger.LogInformation("✓ Found {Count} questions in GeneratedExams table for exam {ExamId}", 
                     questions.Count, examId);
             }
             else
             {
-                _logger.LogWarning("No questions found in either table for exam {ExamId}", examId);
+                _logger.LogError("✗ No questions found in GeneratedExams table for exam {ExamId}", examId);
             }
 
             return questions;
@@ -330,7 +323,7 @@ namespace SmartStudyFunc.Services
             const string sql = @"
                 SELECT q.Id, q.QuestionNumber, q.QuestionText, q.ModelAnswer,
                        q.MaxScore, q.Rubric, q.Keywords,
-                       q.ClassName, q.Subject, q.Chapter
+                       q.ClassName, q.Subject, q.Chapter, q.QuestionType
                 FROM ExamQuestions q
                 WHERE q.ExamId = @ExamId
                 ORDER BY q.QuestionNumber";
@@ -350,6 +343,11 @@ namespace SmartStudyFunc.Services
             {
                 var keywordsJson = reader.IsDBNull(6) ? "[]" : reader.GetString(6);
                 
+                var questionType = reader.IsDBNull(10) ? "" : reader.GetString(10);
+                var isMcq = questionType.Equals("MCQ", StringComparison.OrdinalIgnoreCase) || 
+                           questionType.Equals("multiple-choice", StringComparison.OrdinalIgnoreCase) ||
+                           questionType.Equals("multiple_choice", StringComparison.OrdinalIgnoreCase);
+                
                 questions.Add(new ExamQuestionWithRubric
                 {
                     QuestionId = reader.GetGuid(0).ToString(),
@@ -361,7 +359,8 @@ namespace SmartStudyFunc.Services
                     Keywords = JsonSerializer.Deserialize<List<string>>(keywordsJson) ?? new(),
                     ClassName = reader.IsDBNull(7) ? null : reader.GetString(7),
                     Subject = reader.IsDBNull(8) ? null : reader.GetString(8),
-                    Chapter = reader.IsDBNull(9) ? null : reader.GetString(9)
+                    Chapter = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    IsMcq = isMcq
                 });
             }
 
@@ -408,12 +407,13 @@ namespace SmartStudyFunc.Services
                         {
                             var partName = part.TryGetProperty("partName", out var pn) ? pn.GetString() : "";
                             var marksPerQuestion = part.TryGetProperty("marksPerQuestion", out var mpq) ? mpq.GetInt32() : 1;
+                            var partQuestionType = part.TryGetProperty("questionType", out var pqt) ? pqt.GetString() ?? "" : "";
                             
                             if (part.TryGetProperty("questions", out var questionsElement))
                             {
                                 foreach (var q in questionsElement.EnumerateArray())
                                 {
-                                    var question = ParseQuestionFromJson(q, subject, grade, chapter, marksPerQuestion);
+                                    var question = ParseQuestionFromJson(q, subject, grade, chapter, marksPerQuestion, partQuestionType);
                                     if (question != null)
                                     {
                                         questions.Add(question);
@@ -427,7 +427,7 @@ namespace SmartStudyFunc.Services
                     {
                         foreach (var q in questionsElement.EnumerateArray())
                         {
-                            var question = ParseQuestionFromJson(q, subject, grade, chapter, defaultMarks: 5);
+                            var question = ParseQuestionFromJson(q, subject, grade, chapter, defaultMarks: 5, partQuestionType: "");
                             if (question != null)
                             {
                                 questions.Add(question);
@@ -449,36 +449,108 @@ namespace SmartStudyFunc.Services
             string? subject, 
             string? grade, 
             string? chapter,
-            int defaultMarks)
+            int defaultMarks,
+            string partQuestionType = "")
         {
             try
             {
-                var questionId = q.TryGetProperty("questionId", out var qid) ? qid.GetString() ?? "" : Guid.NewGuid().ToString();
-                var questionNumber = q.TryGetProperty("questionNumber", out var qn) ? qn.GetInt32() : 0;
-                var questionText = q.TryGetProperty("questionText", out var qt) ? qt.GetString() ?? "" : "";
-                var correctAnswer = q.TryGetProperty("correctAnswer", out var ca) ? ca.GetString() ?? "" : "";
-                var topic = q.TryGetProperty("topic", out var t) ? t.GetString() ?? "" : "";
-                var marks = q.TryGetProperty("marks", out var m) ? m.GetInt32() : defaultMarks;
+                // Support multiple field name variations
+                var questionId = q.TryGetProperty("questionId", out var qid) ? qid.GetString() ?? "" 
+                    : q.TryGetProperty("id", out var id) ? id.GetString() ?? "" 
+                    : Guid.NewGuid().ToString();
+                
+                var questionNumber = q.TryGetProperty("questionNumber", out var qn) ? qn.GetInt32() 
+                    : q.TryGetProperty("number", out var num) ? num.GetInt32() 
+                    : 0;
+                
+                var questionText = q.TryGetProperty("questionText", out var qt) ? qt.GetString() ?? "" 
+                    : q.TryGetProperty("question", out var que) ? que.GetString() ?? "" 
+                    : "";
+                
+                // Support multiple field names for answers: correctAnswer, modelAnswer, answer, idealAnswer
+                var correctAnswer = q.TryGetProperty("correctAnswer", out var ca) ? ca.GetString() ?? "" 
+                    : q.TryGetProperty("modelAnswer", out var ma) ? ma.GetString() ?? ""
+                    : q.TryGetProperty("answer", out var ans) ? ans.GetString() ?? ""
+                    : q.TryGetProperty("idealAnswer", out var ia) ? ia.GetString() ?? ""
+                    : "";
+                
+                var topic = q.TryGetProperty("topic", out var t) ? t.GetString() ?? "" 
+                    : q.TryGetProperty("chapter", out var ch) ? ch.GetString() ?? ""
+                    : "";
+                
+                var marks = q.TryGetProperty("marks", out var m) ? m.GetInt32() 
+                    : q.TryGetProperty("maxScore", out var ms) ? ms.GetInt32()
+                    : q.TryGetProperty("points", out var pts) ? pts.GetInt32()
+                    : defaultMarks;
+
+                // Determine if question is MCQ from part-level questionType or question-level type
+                var questionType = q.TryGetProperty("questionType", out var qt1) ? qt1.GetString() ?? "" 
+                    : q.TryGetProperty("type", out var qt2) ? qt2.GetString() ?? ""
+                    : partQuestionType;
+                
+                bool isMcq = questionType.Equals("MCQ", StringComparison.OrdinalIgnoreCase) || 
+                            questionType.Equals("multiple-choice", StringComparison.OrdinalIgnoreCase) ||
+                            questionType.Equals("multiple_choice", StringComparison.OrdinalIgnoreCase);
+                
+                // Try to get MCQ options array
+                var mcqOptions = new List<string>();
+                if (q.TryGetProperty("options", out var opts) && opts.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var option in opts.EnumerateArray())
+                    {
+                        var optionText = option.GetString();
+                        if (!string.IsNullOrWhiteSpace(optionText))
+                        {
+                            mcqOptions.Add(optionText);
+                        }
+                    }
+                    // If we have options array, it's definitely an MCQ
+                    if (mcqOptions.Count > 0)
+                    {
+                        isMcq = true;
+                    }
+                }
+
+                // Try to get rubric if available in JSON
+                var rubricFromJson = q.TryGetProperty("rubric", out var rub) ? rub.GetString() ?? "" : "";
+                
+                // Try to get keywords array if available
+                var keywordsFromJson = new List<string>();
+                if (q.TryGetProperty("keywords", out var kw) && kw.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var keyword in kw.EnumerateArray())
+                    {
+                        var keywordText = keyword.GetString();
+                        if (!string.IsNullOrWhiteSpace(keywordText))
+                        {
+                            keywordsFromJson.Add(keywordText);
+                        }
+                    }
+                }
 
                 // Skip if no question text
                 if (string.IsNullOrWhiteSpace(questionText))
                 {
+                    _logger.LogWarning("Skipping question with empty text. QuestionId: {QuestionId}, QuestionNumber: {QuestionNumber}", 
+                        questionId, questionNumber);
                     return null;
                 }
 
-                // Build rubric from topic if available
-                var rubric = !string.IsNullOrEmpty(topic) 
-                    ? $"Topic: {topic}. Evaluate based on correct answer and understanding of concepts."
-                    : "Evaluate based on correct answer and understanding of concepts.";
+                // Build rubric - use JSON rubric if available, otherwise generate from topic
+                var rubric = !string.IsNullOrWhiteSpace(rubricFromJson) 
+                    ? rubricFromJson
+                    : !string.IsNullOrEmpty(topic) 
+                        ? $"Topic: {topic}. Evaluate based on correct answer and understanding of concepts. Award partial credit for partially correct answers."
+                        : "Evaluate based on correct answer and understanding of concepts. Award partial credit for partially correct answers.";
 
-                // Extract keywords from topic and answer
-                var keywords = new List<string>();
-                if (!string.IsNullOrEmpty(topic))
+                // Extract keywords - use JSON keywords if available, otherwise extract from topic/answer
+                var keywords = keywordsFromJson.Any() ? keywordsFromJson : new List<string>();
+                if (!keywords.Any() && !string.IsNullOrEmpty(topic))
                 {
                     keywords.Add(topic);
                 }
 
-                return new ExamQuestionWithRubric
+                var result = new ExamQuestionWithRubric
                 {
                     QuestionId = questionId,
                     QuestionNumber = questionNumber,
@@ -489,12 +561,20 @@ namespace SmartStudyFunc.Services
                     Keywords = keywords,
                     ClassName = grade,
                     Subject = subject,
-                    Chapter = chapter ?? topic
+                    Chapter = chapter ?? topic,
+                    IsMcq = isMcq,
+                    McqOptions = mcqOptions
                 };
+
+                _logger.LogDebug("Parsed question from GeneratedExams: Q{QuestionNumber}, IsMcq: {IsMcq}, ModelAnswer length: {Length}, MaxScore: {MaxScore}", 
+                    questionNumber, isMcq, correctAnswer.Length, marks);
+
+                return result;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to parse question from JSON");
+                _logger.LogWarning(ex, "Failed to parse question from JSON. Question data: {JsonData}", 
+                    q.GetRawText().Substring(0, Math.Min(200, q.GetRawText().Length)));
                 return null;
             }
         }
