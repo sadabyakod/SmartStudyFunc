@@ -435,12 +435,15 @@ namespace SmartStudyFunc.Services
             normalized = Regex.Replace(normalized, @"(?<=\d)[lI](?=\d)", "1");
             normalized = Regex.Replace(normalized, @"(?<=\d)[O](?=\d)", "0");
 
-            // Normalize whitespace
-            normalized = Regex.Replace(normalized, @"\s+", " ");
-            normalized = Regex.Replace(normalized, @"^\s+|\s+$", "", RegexOptions.Multiline);
-
-            // Normalize line endings
+            // Normalize line endings FIRST (before whitespace normalization)
             normalized = Regex.Replace(normalized, @"\r\n|\r", "\n");
+
+            // Normalize horizontal whitespace (spaces/tabs) but PRESERVE line breaks
+            // Replace multiple spaces/tabs with single space, but keep newlines
+            normalized = Regex.Replace(normalized, @"[ \t]+", " ");
+            
+            // Remove leading/trailing spaces from each line (but keep the lines)
+            normalized = Regex.Replace(normalized, @"^[ \t]+|[ \t]+$", "", RegexOptions.Multiline);
 
             return normalized.Trim();
         }

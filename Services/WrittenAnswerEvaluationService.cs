@@ -912,6 +912,7 @@ RESPONSE FORMAT (STRICT JSON - NO MARKDOWN):
     ""steps"": [
       {
         ""stepNumber"": 1,
+        ""studentWritten"": ""<EXACT line/content student wrote for this step>"",
         ""awardedMarks"": <decimal>,
         ""maxMarks"": <decimal>,
         ""reason"": ""<1-2 line explanation>""
@@ -980,9 +981,30 @@ CRITICAL RULES:
                 sb.AppendLine();
             }
 
+            // Parse student answer into individual lines/steps for better evaluation
+            var studentLines = studentAnswer.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => !string.IsNullOrWhiteSpace(line))
+                .ToList();
+
             sb.AppendLine("STUDENT'S ANSWER (OCR EXTRACTED - MAY HAVE MINOR ERRORS):");
             sb.AppendLine("───────────────────────────────────────────────────────────");
-            sb.AppendLine(studentAnswer);
+            
+            if (studentLines.Count > 1)
+            {
+                // Multi-line answer - show each line as a step
+                sb.AppendLine("Student wrote the following lines:");
+                for (int i = 0; i < studentLines.Count; i++)
+                {
+                    sb.AppendLine($"  Line {i + 1}: {studentLines[i]}");
+                }
+            }
+            else
+            {
+                // Single line answer
+                sb.AppendLine(studentAnswer);
+            }
+            
             sb.AppendLine("───────────────────────────────────────────────────────────");
             sb.AppendLine();
 
@@ -990,8 +1012,9 @@ CRITICAL RULES:
             sb.AppendLine("1. Generate expected answer ONLY from syllabus content above");
             sb.AppendLine("2. Create step-wise marking scheme (sum of step marks = max marks)");
             sb.AppendLine("3. Evaluate student answer against EACH step independently");
-            sb.AppendLine("4. Award partial credit where applicable");
-            sb.AppendLine("5. Return STRICT JSON response");
+            sb.AppendLine("4. In stepWiseBreakdown, include the ACTUAL LINE the student wrote for each step");
+            sb.AppendLine("5. Award partial credit where applicable");
+            sb.AppendLine("6. Return STRICT JSON response");
             sb.AppendLine();
             sb.AppendLine("EVALUATE NOW:");
 
