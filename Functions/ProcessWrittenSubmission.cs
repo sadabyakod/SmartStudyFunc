@@ -8,9 +8,11 @@ using System.Threading.Tasks;
 using Azure.Storage.Blobs;
 using Azure.Storage.Queues;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using SmartStudyFunc.Models;
 using SmartStudyFunc.Services;
+using SmartStudyFunc.Services.Evaluation;
 
 namespace SmartStudyFunc.Functions
 {
@@ -36,9 +38,11 @@ namespace SmartStudyFunc.Functions
     {
         private readonly IGoogleVisionOcrService _ocrService;
         private readonly IWrittenAnswerEvaluationService _evaluationService;
+        private readonly ISubjectRouter _subjectRouter;
         private readonly IWrittenSubmissionRepository _repository;
         private readonly BlobServiceClient _blobServiceClient;
         private readonly QueueServiceClient _queueServiceClient;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<ProcessWrittenSubmission> _logger;
 
         private const int MaxRetries = 3;
@@ -48,16 +52,20 @@ namespace SmartStudyFunc.Functions
         public ProcessWrittenSubmission(
             IGoogleVisionOcrService ocrService,
             IWrittenAnswerEvaluationService evaluationService,
+            ISubjectRouter subjectRouter,
             IWrittenSubmissionRepository repository,
             BlobServiceClient blobServiceClient,
             QueueServiceClient queueServiceClient,
+            IConfiguration configuration,
             ILogger<ProcessWrittenSubmission> logger)
         {
             _ocrService = ocrService;
             _evaluationService = evaluationService;
+            _subjectRouter = subjectRouter;
             _repository = repository;
             _blobServiceClient = blobServiceClient;
             _queueServiceClient = queueServiceClient;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -261,9 +269,12 @@ namespace SmartStudyFunc.Functions
                     "[EVALUATION_STARTED] SubmissionId={SubmissionId}, QuestionCount={QuestionCount}",
                     submissionId, questions.Count);
 
+                // Check if V2 evaluation is enabled
+                var useV2 = _configuration.GetValue<bool>("Evaluation:UseV2", false);
+                
                 _logger.LogWarning(
-                    "[PROCESS-EVAL] === CALLING EVALUATION SERVICE === SubmissionId={SubmissionId}, Questions={QuestionCount}",
-                    submissionId, questions.Count);
+                    "[PROCESS-EVAL] === CALLING EVALUATION SERVICE === SubmissionId={SubmissionId}, Questions={QuestionCount}, UseV2={UseV2}",
+                    submissionId, questions.Count, useV2);
                 
                 // Hard timeout for entire evaluation: 2 minutes max
                 using var evaluationCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -272,15 +283,28 @@ namespace SmartStudyFunc.Functions
                 WrittenEvaluationResult evaluationResult;
                 try
                 {
-                    evaluationResult = await _evaluationService.EvaluateSubmissionAsync(
-                        submission,
-                        extractedText,
-                        questions,
-                        evaluationCts.Token);
+                    if (useV2)
+                    {
+                        // Use V2 evaluation engine
+                        evaluationResult = await EvaluateWithV2Async(
+                            submission,
+                            extractedText,
+                            questions,
+                            evaluationCts.Token);
+                    }
+                    else
+                    {
+                        // Use V1 evaluation service
+                        evaluationResult = await _evaluationService.EvaluateSubmissionAsync(
+                            submission,
+                            extractedText,
+                            questions,
+                            evaluationCts.Token);
+                    }
 
                     _logger.LogWarning(
-                        "[PROCESS-EVAL] === EVALUATION SERVICE RETURNED === SubmissionId={SubmissionId}, TotalScore={Score}",
-                        submissionId, evaluationResult.TotalScore);
+                        "[PROCESS-EVAL] === EVALUATION SERVICE RETURNED === SubmissionId={SubmissionId}, TotalScore={Score}, Engine={Engine}",
+                        submissionId, evaluationResult.TotalScore, useV2 ? "V2" : "V1");
                 }
                 catch (OperationCanceledException) when (evaluationCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
@@ -799,6 +823,126 @@ namespace SmartStudyFunc.Functions
                 evaluationResult.McqScore, evaluationResult.McqMaxScore,
                 evaluationResult.SubjectiveScore, evaluationResult.SubjectiveMaxScore,
                 evaluationResult.TotalScore, evaluationResult.MaxPossibleScore);
+        }
+
+        /// <summary>
+        /// Evaluates submission using V2 evaluation engines (subject-specific routing)
+        /// </summary>
+        private async Task<WrittenEvaluationResult> EvaluateWithV2Async(
+            WrittenSubmission submission,
+            string extractedText,
+            System.Collections.Generic.List<ExamQuestionWithRubric> questions,
+            CancellationToken cancellationToken)
+        {
+            _logger.LogInformation(
+                "[V2_EVALUATION_START] SubmissionId={SubmissionId}, QuestionCount={QuestionCount}",
+                submission.Id, questions.Count);
+
+            var result = new WrittenEvaluationResult
+            {
+                QuestionEvaluations = new System.Collections.Generic.List<QuestionEvaluation>()
+            };
+
+            decimal totalScore = 0;
+            decimal maxPossibleScore = 0;
+
+            foreach (var question in questions)
+            {
+                try
+                {
+                    // Create evaluation context for V2 engine
+                    var context = new EvaluationContext
+                    {
+                        QuestionText = question.QuestionText,
+                        StudentAnswer = extractedText, // Full text for now - V2 engine will extract relevant part
+                        ModelAnswer = question.CorrectAnswer,
+                        MaxMarks = question.Marks,
+                        Subject = question.Subject ?? "General",
+                        QuestionType = question.QuestionType ?? "subjective",
+                        RubricSteps = question.RubricSteps ?? new System.Collections.Generic.List<RubricStep>()
+                    };
+
+                    _logger.LogInformation(
+                        "[V2_EVALUATE_QUESTION] Q{QuestionNumber}, Subject={Subject}, Type={Type}",
+                        question.QuestionNumber, context.Subject, context.QuestionType);
+
+                    // Route to appropriate V2 engine
+                    var engineResult = await _subjectRouter.RouteAndEvaluateAsync(context, cancellationToken);
+
+                    var evaluation = new QuestionEvaluation
+                    {
+                        QuestionId = question.Id,
+                        QuestionNumber = question.QuestionNumber,
+                        QuestionText = question.QuestionText,
+                        ExtractedAnswer = extractedText,
+                        ModelAnswer = question.CorrectAnswer,
+                        MaxScore = question.Marks,
+                        AwardedScore = (decimal)engineResult.AwardedMarks,
+                        Feedback = engineResult.Feedback,
+                        RubricBreakdown = JsonSerializer.Serialize(engineResult.StepBreakdown),
+                        EvaluatedAt = DateTime.UtcNow,
+                        IsMcq = false
+                    };
+
+                    result.QuestionEvaluations.Add(evaluation);
+
+                    totalScore += evaluation.AwardedScore;
+                    maxPossibleScore += evaluation.MaxScore;
+
+                    _logger.LogInformation(
+                        "[V2_QUESTION_EVALUATED] Q{QuestionNumber}: Score={Score}/{Max}, Engine={Engine}",
+                        question.QuestionNumber, evaluation.AwardedScore, evaluation.MaxScore, engineResult.EngineUsed);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex,
+                        "[V2_QUESTION_FAILED] Q{QuestionNumber} failed: {Error}",
+                        question.QuestionNumber, ex.Message);
+
+                    // Add failed evaluation
+                    result.QuestionEvaluations.Add(new QuestionEvaluation
+                    {
+                        QuestionId = question.Id,
+                        QuestionNumber = question.QuestionNumber,
+                        QuestionText = question.QuestionText,
+                        ExtractedAnswer = extractedText,
+                        ModelAnswer = question.CorrectAnswer,
+                        MaxScore = question.Marks,
+                        AwardedScore = 0,
+                        Feedback = $"Evaluation failed: {ex.Message}",
+                        RubricBreakdown = "[]",
+                        EvaluatedAt = DateTime.UtcNow,
+                        IsMcq = false
+                    });
+
+                    maxPossibleScore += question.Marks;
+                }
+            }
+
+            // Calculate final scores
+            result.TotalScore = totalScore;
+            result.MaxPossibleScore = maxPossibleScore;
+            result.SubjectiveScore = totalScore;
+            result.SubjectiveMaxScore = maxPossibleScore;
+            result.SubjectiveCount = questions.Count;
+            result.Percentage = maxPossibleScore > 0 ? Math.Round((totalScore / maxPossibleScore) * 100, 2) : 0;
+            result.Grade = CalculateGrade(result.Percentage);
+
+            _logger.LogInformation(
+                "[V2_EVALUATION_COMPLETE] SubmissionId={SubmissionId}, Score={Score}/{Max}, Percentage={Percentage}%",
+                submission.Id, totalScore, maxPossibleScore, result.Percentage);
+
+            return result;
+        }
+
+        private string CalculateGrade(decimal percentage)
+        {
+            if (percentage >= 90) return "A+";
+            if (percentage >= 80) return "A";
+            if (percentage >= 70) return "B";
+            if (percentage >= 60) return "C";
+            if (percentage >= 50) return "D";
+            return "F";
         }
     }
 }
