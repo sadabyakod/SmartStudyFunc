@@ -212,6 +212,9 @@ namespace SmartStudyFunc.Models
         [JsonPropertyName("stepNumber")]
         public int StepNumber { get; set; }
 
+        [JsonPropertyName("studentWritten")]
+        public string? StudentWritten { get; set; }
+
         [JsonPropertyName("awardedMarks")]
         public decimal AwardedMarks { get; set; }
 
