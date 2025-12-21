@@ -11,21 +11,21 @@
       "enablePerformanceCountersCollection": true
     },
     "logLevel": {
-      "default": "Warning",
+      "default": "Information",
       "Function": "Information",
       "Microsoft": "Warning",
-      "Azure.Core": "Error",
+      "Azure.Core": "Warning",
       "Azure.Storage": "Warning",
       "Host.Results": "Information",
-      "Host.Aggregator": "Warning"
+      "Host.Aggregator": "Information"
     }
   },
 
   "extensions": {
     "http": {
       "routePrefix": "api",
-      "maxConcurrentRequests": 10,
-      "maxOutstandingRequests": 100,
+      "maxConcurrentRequests": 5,
+      "maxOutstandingRequests": 50,
       "dynamicThrottlesEnabled": false,
       "customHeaders": {
         "Access-Control-Allow-Origin": "*",
@@ -33,19 +33,12 @@
         "Access-Control-Allow-Headers": "Content-Type, Authorization"
       }
     },
-    "queues": {
-      "maxPollingInterval": "00:00:00.500",
-      "visibilityTimeout": "00:03:00",
-      "batchSize": 8,
-      "maxDequeueCount": 3,
-      "newBatchThreshold": 4
-    },
     "blobs": {
-      "maxDegreeOfParallelism": 8
+      "maxDegreeOfParallelism": 1
     }
   },
 
-  "functionTimeout": "00:05:00",
+  "functionTimeout": "00:10:00",
 
   "healthMonitor": {
     "enabled": true,
@@ -56,22 +49,22 @@
 
   "singleton": {
     "lockPeriod": "00:00:15",
-    "listenerLockPeriod": "00:00:30",
-    "listenerLockRecoveryPollingInterval": "00:00:15",
-    "lockAcquisitionTimeout": "00:00:30",
-    "lockAcquisitionPollingInterval": "00:00:02"
+    "listenerLockPeriod": "00:01:00",
+    "listenerLockRecoveryPollingInterval": "00:01:00",
+    "lockAcquisitionTimeout": "00:01:00",
+    "lockAcquisitionPollingInterval": "00:00:05"
   },
 
   "concurrency": {
-    "dynamicConcurrencyEnabled": true,
-    "maximumFunctionConcurrency": 16
+    "dynamicConcurrencyEnabled": false,
+    "maximumFunctionConcurrency": 2
   },
 
   "retry": {
     "strategy": "exponentialBackoff",
     "maxRetryCount": 3,
-    "minimumInterval": "00:00:01",
-    "maximumInterval": "00:00:15"
+    "minimumInterval": "00:00:03",
+    "maximumInterval": "00:01:00"
   }
 }
 

@@ -93,6 +93,33 @@
     ]
   },
   {
+    "name": "EvaluateAnswerV2",
+    "scriptFile": "SmartStudyFunc.dll",
+    "entryPoint": "SmartStudyFunc.Functions.EvaluateAnswerV2.Run",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Function",
+        "methods": [
+          "post"
+        ],
+        "route": "answers/evaluate/v2",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  },
+  {
     "name": "GenerateModelExam",
     "scriptFile": "SmartStudyFunc.dll",
     "entryPoint": "SmartStudyFunc.Functions.GenerateModelExam.Run",
@@ -372,6 +399,33 @@
           "post"
         ],
         "route": "rag/search",
+        "properties": {}
+      },
+      {
+        "name": "$return",
+        "type": "http",
+        "direction": "Out"
+      }
+    ]
+  },
+  {
+    "name": "SubmitMcqAnswer",
+    "scriptFile": "SmartStudyFunc.dll",
+    "entryPoint": "SmartStudyFunc.Functions.SubmitMcqAnswer.Run",
+    "language": "dotnet-isolated",
+    "properties": {
+      "IsCodeless": false
+    },
+    "bindings": [
+      {
+        "name": "req",
+        "direction": "In",
+        "type": "httpTrigger",
+        "authLevel": "Function",
+        "methods": [
+          "post"
+        ],
+        "route": "mcq/map-to-blob",
         "properties": {}
       },
       {

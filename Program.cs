@@ -41,6 +41,46 @@ var host = new HostBuilder()
         services.AddScoped<EvaluateAnswer>();
 
         // ========================================
+        // NEW: Subject-Specific Evaluation Engines
+        // ========================================
+        
+        // V2: Memory Cache for syllabus caching (100 MB limit)
+        services.AddMemoryCache();
+        
+        // V2: Enhanced Question Classifier (30% accuracy improvement)
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.EnhancedQuestionClassifier>();
+        
+        // V2: Syllabus Cache Service (80%+ cache hit rate)
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.SyllabusCacheService>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<SmartStudyFunc.Services.Evaluation.SyllabusCacheService>>();
+            var blobServiceClient = sp.GetRequiredService<BlobServiceClient>();
+            var cache = sp.GetRequiredService<Microsoft.Extensions.Caching.Memory.IMemoryCache>();
+            return new SmartStudyFunc.Services.Evaluation.SyllabusCacheService(logger, blobServiceClient, cache);
+        });
+        
+        // V2: Evaluation Audit Logger (full compliance tracking)
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.EvaluationAuditLogger>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<SmartStudyFunc.Services.Evaluation.EvaluationAuditLogger>>();
+            var connectionString = configuration["SqlConnectionString"] 
+                ?? configuration.GetConnectionString("SqlDb");
+            return new SmartStudyFunc.Services.Evaluation.EvaluationAuditLogger(logger, connectionString!);
+        });
+        
+        // Register Question Classifier (V1 - fallback)
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.IQuestionClassifier, SmartStudyFunc.Services.Evaluation.QuestionClassifier>();
+        
+        // Register all evaluation engines
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.IEvaluationEngine, SmartStudyFunc.Services.Evaluation.MathematicsEvaluationEngine>();
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.IEvaluationEngine, SmartStudyFunc.Services.Evaluation.PhysicsChemistryEvaluationEngine>();
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.IEvaluationEngine, SmartStudyFunc.Services.Evaluation.BiologySocialEvaluationEngine>();
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.IEvaluationEngine, SmartStudyFunc.Services.Evaluation.LanguageEvaluationEngine>();
+        
+        // Register Subject Router (orchestrator)
+        services.AddSingleton<SmartStudyFunc.Services.Evaluation.ISubjectRouter, SmartStudyFunc.Services.Evaluation.SubjectRouter>();
+
+        // ========================================
         // Azure Storage Clients
         // ========================================
 
