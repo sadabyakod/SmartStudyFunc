@@ -253,34 +253,8 @@ namespace SmartStudyFunc.Services
                     await cmd.ExecuteNonQueryAsync(cancellationToken);
                 }
 
-                // Insert individual question evaluations
-                const string insertEvaluationSql = @"
-                    INSERT INTO WrittenQuestionEvaluations 
-                        (Id, WrittenSubmissionId, QuestionId, QuestionNumber, 
-                         ExtractedAnswer, ModelAnswer, MaxScore, AwardedScore, 
-                         Feedback, RubricBreakdown, EvaluatedAt)
-                    VALUES 
-                        (@Id, @WrittenSubmissionId, @QuestionId, @QuestionNumber,
-                         @ExtractedAnswer, @ModelAnswer, @MaxScore, @AwardedScore,
-                         @Feedback, @RubricBreakdown, @EvaluatedAt)";
-
-                foreach (var eval in result.QuestionEvaluations)
-                {
-                    await using var cmd = new SqlCommand(insertEvaluationSql, connection, transaction);
-                    cmd.Parameters.AddWithValue("@Id", eval.Id);
-                    cmd.Parameters.AddWithValue("@WrittenSubmissionId", eval.WrittenSubmissionId);
-                    cmd.Parameters.AddWithValue("@QuestionId", eval.QuestionId);
-                    cmd.Parameters.AddWithValue("@QuestionNumber", eval.QuestionNumber);
-                    cmd.Parameters.AddWithValue("@ExtractedAnswer", eval.ExtractedAnswer);
-                    cmd.Parameters.AddWithValue("@ModelAnswer", eval.ModelAnswer);
-                    cmd.Parameters.AddWithValue("@MaxScore", eval.MaxScore);
-                    cmd.Parameters.AddWithValue("@AwardedScore", eval.AwardedScore);
-                    cmd.Parameters.AddWithValue("@Feedback", eval.Feedback);
-                    cmd.Parameters.AddWithValue("@RubricBreakdown", eval.RubricBreakdown);
-                    cmd.Parameters.AddWithValue("@EvaluatedAt", eval.EvaluatedAt);
-
-                    await cmd.ExecuteNonQueryAsync(cancellationToken);
-                }
+                // All question evaluations are stored in blob (EvaluationResultBlobPath)
+                // No need to duplicate in WrittenQuestionEvaluations table
 
                 await transaction.CommitAsync(cancellationToken);
 

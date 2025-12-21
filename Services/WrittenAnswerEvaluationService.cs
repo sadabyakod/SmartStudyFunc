@@ -125,6 +125,7 @@ namespace SmartStudyFunc.Services
 
                     try
                     {
+<<<<<<< HEAD
                         return await EvaluateQuestionBatchAsync(
                             submission.Id,
                             batchAnswers.Select(b => b.Question).ToList(),
@@ -155,6 +156,21 @@ namespace SmartStudyFunc.Services
                 foreach (var batchResult in batchResults)
                 {
                     evaluations.AddRange(batchResult);
+=======
+                        Id = Guid.NewGuid(),
+                        WrittenSubmissionId = submission.Id,
+                        QuestionId = question.QuestionId,
+                        QuestionNumber = question.QuestionNumber,
+                        QuestionText = question.QuestionText,
+                        ExtractedAnswer = studentAnswer,
+                        MaxScore = question.MaxScore,
+                        AwardedScore = 0,
+                        Feedback = $"Evaluation failed: {ex.Message}",
+                        RubricBreakdown = "{}",
+                        EvaluatedAt = DateTime.UtcNow
+                    });
+                    maxPossibleScore += question.MaxScore;
+>>>>>>> 63b4bc09c0ae741b00eb4126d76448b8c9babc16
                 }
                 
                 _logger.LogInformation(
@@ -859,6 +875,7 @@ FEEDBACK STYLE:
                 WrittenSubmissionId = submissionId,
                 QuestionId = question.QuestionId,
                 QuestionNumber = question.QuestionNumber,
+                QuestionText = question.QuestionText,
                 ExtractedAnswer = studentAnswer,
                 ModelAnswer = evalResult.ExpectedAnswer.Summary,
                 MaxScore = question.MaxScore,
