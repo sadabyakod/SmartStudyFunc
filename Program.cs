@@ -130,6 +130,22 @@ var host = new HostBuilder()
             return new GoogleVisionOcrService(configuration, blobServiceClient, logger);
         });
 
+        // Register Azure Document Intelligence OCR Service
+        services.AddSingleton<OcrService>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<OcrService>>();
+            return new OcrService(logger);
+        });
+
+        // Register Dual OCR Service (uses both Google and Azure)
+        services.AddSingleton<IDualOcrService>(sp =>
+        {
+            var googleOcr = sp.GetRequiredService<IGoogleVisionOcrService>();
+            var azureOcr = sp.GetRequiredService<OcrService>();
+            var logger = sp.GetRequiredService<ILogger<DualOcrService>>();
+            return new DualOcrService(googleOcr, azureOcr, logger);
+        });
+
         // Register Written Submission Repository
         services.AddSingleton<IWrittenSubmissionRepository>(sp =>
         {

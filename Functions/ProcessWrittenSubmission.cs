@@ -37,6 +37,7 @@ namespace SmartStudyFunc.Functions
     public class ProcessWrittenSubmission
     {
         private readonly IGoogleVisionOcrService _ocrService;
+        private readonly IDualOcrService? _dualOcrService;
         private readonly IWrittenAnswerEvaluationService _evaluationService;
         private readonly ISubjectRouter _subjectRouter;
         private readonly IWrittenSubmissionRepository _repository;
@@ -57,9 +58,11 @@ namespace SmartStudyFunc.Functions
             BlobServiceClient blobServiceClient,
             QueueServiceClient queueServiceClient,
             IConfiguration configuration,
-            ILogger<ProcessWrittenSubmission> logger)
+            ILogger<ProcessWrittenSubmission> logger,
+            IDualOcrService? dualOcrService = null)
         {
             _ocrService = ocrService;
+            _dualOcrService = dualOcrService;
             _evaluationService = evaluationService;
             _subjectRouter = subjectRouter;
             _repository = repository;
@@ -179,27 +182,66 @@ namespace SmartStudyFunc.Functions
                     "[OCR_STARTED] SubmissionId={SubmissionId}, FileCount={FileCount}",
                     submissionId, message.FilePaths.Count);
 
-                var ocrResult = await _ocrService.ExtractTextFromBlobsAsync(
-                    message.FilePaths,
-                    submissionId,
-                    cancellationToken);
+                // Check if dual OCR is enabled
+                var useDualOcr = _configuration.GetValue<bool>("OCR:DualVerificationEnabled", false) && _dualOcrService != null;
+                
+                string extractedText;
+                float avgConfidence;
+                
+                if (useDualOcr)
+                {
+                    _logger.LogInformation("[OCR] Using DUAL OCR (Google + Azure) for SubmissionId={SubmissionId}", submissionId);
+                    var dualResult = await _dualOcrService!.ExtractTextFromBlobsAsync(
+                        message.FilePaths,
+                        submissionId,
+                        cancellationToken);
+                    
+                    if (!dualResult.Success)
+                    {
+                        _logger.LogError(
+                            "[OCR_FAILED] Dual OCR failed. SubmissionId={SubmissionId}, Error={Error}",
+                            submissionId, dualResult.ErrorMessage);
+                        await HandleRetryOrFailAsync(
+                            message,
+                            $"Dual OCR failed: {dualResult.ErrorMessage}",
+                            cancellationToken);
+                        return;
+                    }
+                    
+                    extractedText = dualResult.CombinedText;
+                    avgConfidence = Math.Max(dualResult.GoogleConfidence, dualResult.AzureConfidence);
+                    
+                    _logger.LogInformation(
+                        "[OCR_SUCCESS] Dual OCR completed. Primary={Primary}, GoogleConf={GoogleConf:F2}, AzureConf={AzureConf:F2}",
+                        dualResult.PrimaryEngine, dualResult.GoogleConfidence, dualResult.AzureConfidence);
+                }
+                else
+                {
+                    _logger.LogInformation("[OCR] Using Google Vision OCR for SubmissionId={SubmissionId}", submissionId);
+                    var ocrResult = await _ocrService.ExtractTextFromBlobsAsync(
+                        message.FilePaths,
+                        submissionId,
+                        cancellationToken);
+                    
+                    if (!ocrResult.Success)
+                    {
+                        _logger.LogError(
+                            "[OCR_FAILED] SubmissionId={SubmissionId}, Error={Error}, DurationMs={Duration}",
+                            submissionId, ocrResult.ErrorMessage, ocrStopwatch.ElapsedMilliseconds);
+
+                        await HandleRetryOrFailAsync(
+                            message,
+                            $"OCR failed: {ocrResult.ErrorMessage}",
+                            cancellationToken);
+                        return;
+                    }
+                    
+                    extractedText = ocrResult.CombinedText;
+                    avgConfidence = ocrResult.AverageConfidence;
+                }
 
                 ocrStopwatch.Stop();
 
-                if (!ocrResult.Success)
-                {
-                    _logger.LogError(
-                        "[OCR_FAILED] SubmissionId={SubmissionId}, Error={Error}, DurationMs={Duration}",
-                        submissionId, ocrResult.ErrorMessage, ocrStopwatch.ElapsedMilliseconds);
-
-                    await HandleRetryOrFailAsync(
-                        message,
-                        $"OCR failed: {ocrResult.ErrorMessage}",
-                        cancellationToken);
-                    return;
-                }
-
-                // Save OCR results
                 var extractedText = ocrResult.NormalizedText;
                 var extractedTextJson = JsonSerializer.Serialize(ocrResult.Pages);
                 string? textBlobPath = null;
