@@ -161,10 +161,23 @@ namespace SmartStudyFunc.Models
         public List<string> Keywords { get; set; } = new();
         
         /// <summary>
-        /// Step-wise marking scheme (board blueprint style)
+        /// Step-wise marking scheme (SmartStudyFunc format)
         /// </summary>
         [JsonPropertyName("markingSteps")]
         public List<RubricMarkingStep> MarkingSteps { get; set; } = new();
+        
+        /// <summary>
+        /// Step-wise marking scheme (Backend format: "rubric" array)
+        /// </summary>
+        [JsonPropertyName("rubric")]
+        public List<RubricMarkingStep> Rubric { get; set; } = new();
+        
+        /// <summary>
+        /// Get all marking steps - merges both formats
+        /// </summary>
+        [JsonIgnore]
+        public List<RubricMarkingStep> AllMarkingSteps => 
+            MarkingSteps.Count > 0 ? MarkingSteps : Rubric;
         
         /// <summary>
         /// General rubric text for AI evaluation
@@ -186,24 +199,76 @@ namespace SmartStudyFunc.Models
     }
 
     /// <summary>
-    /// Step in marking scheme for step-wise evaluation
+    /// Step in marking scheme for step-wise evaluation.
+    /// Supports both SmartStudyFunc format and Backend format:
+    /// - SmartStudyFunc: stepNumber, description, maxMarks
+    /// - Backend: stepNo, expected, marks
     /// </summary>
     public class RubricMarkingStep
     {
+        private int _stepNumber;
+        private string _description = string.Empty;
+        private decimal _maxMarks;
+        
+        /// <summary>Step number (SmartStudyFunc format)</summary>
         [JsonPropertyName("stepNumber")]
-        public int StepNumber { get; set; }
+        public int StepNumber 
+        { 
+            get => _stepNumber > 0 ? _stepNumber : StepNo; 
+            set => _stepNumber = value; 
+        }
         
+        /// <summary>Step number (Backend format)</summary>
+        [JsonPropertyName("stepNo")]
+        public int StepNo { get; set; }
+        
+        /// <summary>Step description (SmartStudyFunc format)</summary>
         [JsonPropertyName("description")]
-        public string Description { get; set; } = string.Empty;
+        public string Description 
+        { 
+            get => !string.IsNullOrEmpty(_description) ? _description : Expected; 
+            set => _description = value; 
+        }
         
+        /// <summary>Expected answer text (Backend format)</summary>
+        [JsonPropertyName("expected")]
+        public string Expected { get; set; } = string.Empty;
+        
+        /// <summary>Max marks (SmartStudyFunc format)</summary>
         [JsonPropertyName("maxMarks")]
-        public decimal MaxMarks { get; set; }
+        public decimal MaxMarks 
+        { 
+            get => _maxMarks > 0 ? _maxMarks : Marks; 
+            set => _maxMarks = value; 
+        }
+        
+        /// <summary>Marks for this step (Backend format)</summary>
+        [JsonPropertyName("marks")]
+        public decimal Marks { get; set; }
         
         [JsonPropertyName("keywords")]
         public List<string> Keywords { get; set; } = new();
         
         [JsonPropertyName("criteria")]
         public string? Criteria { get; set; }
+        
+        /// <summary>
+        /// Get normalized step number regardless of format
+        /// </summary>
+        [JsonIgnore]
+        public int NormalizedStepNumber => StepNumber > 0 ? StepNumber : StepNo;
+        
+        /// <summary>
+        /// Get normalized description regardless of format
+        /// </summary>
+        [JsonIgnore]
+        public string NormalizedDescription => !string.IsNullOrEmpty(Description) ? Description : Expected;
+        
+        /// <summary>
+        /// Get normalized marks regardless of format
+        /// </summary>
+        [JsonIgnore]
+        public decimal NormalizedMarks => MaxMarks > 0 ? MaxMarks : Marks;
     }
 
     /// <summary>

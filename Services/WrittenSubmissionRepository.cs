@@ -518,7 +518,8 @@ namespace SmartStudyFunc.Services
                             {
                                 foreach (var q in questionsElement.EnumerateArray())
                                 {
-                                    var question = ParseQuestionFromJson(q, subject, grade, chapter, marksPerQuestion, partQuestionType);
+                                    var question = await ParseQuestionWithBlobRubricAsync(
+                                        q, examId, subject, grade, chapter, marksPerQuestion, partQuestionType, cancellationToken);
                                     if (question != null)
                                     {
                                         questions.Add(question);
@@ -532,7 +533,8 @@ namespace SmartStudyFunc.Services
                     {
                         foreach (var q in questionsElement.EnumerateArray())
                         {
-                            var question = ParseQuestionFromJson(q, subject, grade, chapter, defaultMarks: 5, partQuestionType: "");
+                            var question = await ParseQuestionWithBlobRubricAsync(
+                                q, examId, subject, grade, chapter, defaultMarks: 5, partQuestionType: "", cancellationToken);
                             if (question != null)
                             {
                                 questions.Add(question);
@@ -547,6 +549,65 @@ namespace SmartStudyFunc.Services
             }
 
             return questions;
+        }
+        
+        /// <summary>
+        /// Parse question from JSON and try to load rubric from blob storage.
+        /// Uses path format: paper-{examId}/question-{questionId}.json
+        /// </summary>
+        private async Task<ExamQuestionWithRubric?> ParseQuestionWithBlobRubricAsync(
+            JsonElement q,
+            string examId,
+            string? subject, 
+            string? grade, 
+            string? chapter,
+            int defaultMarks,
+            string partQuestionType,
+            CancellationToken cancellationToken)
+        {
+            // Parse basic question data
+            var question = ParseQuestionFromJson(q, subject, grade, chapter, defaultMarks, partQuestionType);
+            if (question == null) return null;
+            
+            // Try to load rubric from blob storage if available
+            if (_rubricBlobService != null && !string.IsNullOrEmpty(examId) && !string.IsNullOrEmpty(question.QuestionId))
+            {
+                try
+                {
+                    var rubricFromBlob = await _rubricBlobService.GetRubricByIdAsync(
+                        examId, question.QuestionId, cancellationToken);
+                    
+                    if (rubricFromBlob != null)
+                    {
+                        // Use rubric text from blob (normalized with step-wise marking)
+                        if (!string.IsNullOrEmpty(rubricFromBlob.RubricText))
+                        {
+                            question.Rubric = rubricFromBlob.RubricText;
+                            _logger.LogDebug("Loaded rubric from blob for Q{QuestionNumber} ({ExamId}/{QuestionId})", 
+                                question.QuestionNumber, examId, question.QuestionId);
+                        }
+                        
+                        // Use model answer from blob if current one is empty
+                        if (string.IsNullOrEmpty(question.ModelAnswer) && !string.IsNullOrEmpty(rubricFromBlob.ModelAnswer))
+                        {
+                            question.ModelAnswer = rubricFromBlob.ModelAnswer;
+                        }
+                        
+                        // Use keywords from blob if current ones are empty
+                        if (!question.Keywords.Any() && rubricFromBlob.Keywords.Any())
+                        {
+                            question.Keywords = rubricFromBlob.Keywords;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to load rubric from blob for Q{QuestionNumber} - using inline rubric", 
+                        question.QuestionNumber);
+                }
+            }
+            
+            return question;
         }
 
         private ExamQuestionWithRubric? ParseQuestionFromJson(

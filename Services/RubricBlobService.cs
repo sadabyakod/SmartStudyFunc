@@ -35,7 +35,13 @@ namespace SmartStudyFunc.Services
         Task<QuestionRubric?> GetRubricAsync(string blobPath, CancellationToken cancellationToken = default);
         
         /// <summary>
-        /// Get all rubrics for a paper
+        /// Get rubric by examId and questionId (uses standard path format)
+        /// Path: paper-{examId}/question-{questionId}.json
+        /// </summary>
+        Task<QuestionRubric?> GetRubricByIdAsync(string examId, string questionId, CancellationToken cancellationToken = default);
+        
+        /// <summary>
+        /// Get all rubrics for a paper/exam
         /// </summary>
         Task<List<QuestionRubric>> GetRubricsForPaperAsync(string paperId, CancellationToken cancellationToken = default);
         
@@ -150,6 +156,12 @@ namespace SmartStudyFunc.Services
                 var response = await blobClient.DownloadContentAsync(cancellationToken);
                 var json = response.Value.Content.ToString();
                 var rubric = JsonSerializer.Deserialize<QuestionRubric>(json, _jsonOptions);
+                
+                if (rubric != null)
+                {
+                    // Normalize rubric - ensure RubricText is populated from steps if empty
+                    NormalizeRubric(rubric);
+                }
 
                 _logger.LogDebug("[RUBRIC_LOADED] BlobPath={BlobPath}", blobPath);
                 return rubric;
@@ -159,6 +171,19 @@ namespace SmartStudyFunc.Services
                 _logger.LogError(ex, "[RUBRIC_LOAD_FAILED] BlobPath={BlobPath}", blobPath);
                 return null;
             }
+        }
+        
+        public async Task<QuestionRubric?> GetRubricByIdAsync(
+            string examId, 
+            string questionId, 
+            CancellationToken cancellationToken = default)
+        {
+            // Standard path format: paper-{examId}/question-{questionId}.json
+            var blobPath = $"paper-{examId}/question-{questionId}.json";
+            
+            _logger.LogDebug("[RUBRIC_LOOKUP_BY_ID] ExamId={ExamId}, QuestionId={QuestionId}", examId, questionId);
+            
+            return await GetRubricAsync(blobPath, cancellationToken);
         }
 
         public async Task<List<QuestionRubric>> GetRubricsForPaperAsync(
@@ -230,6 +255,57 @@ namespace SmartStudyFunc.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[RUBRICS_DELETE_FAILED] PaperId={PaperId}", paperId);
+            }
+        }
+        
+        /// <summary>
+        /// Normalize rubric to ensure all fields are populated regardless of source format.
+        /// Backend format uses: rubric[{stepNo, expected, marks}]
+        /// SmartStudyFunc format uses: markingSteps[{stepNumber, description, maxMarks}]
+        /// </summary>
+        private void NormalizeRubric(QuestionRubric rubric)
+        {
+            // Get steps from either format
+            var steps = rubric.AllMarkingSteps;
+            
+            if (steps.Count > 0 && string.IsNullOrEmpty(rubric.RubricText))
+            {
+                // Build RubricText from steps for AI evaluation
+                var sb = new StringBuilder();
+                sb.AppendLine($"STEP-WISE MARKING SCHEME (Total: {rubric.TotalMarks} marks):");
+                sb.AppendLine();
+                
+                foreach (var step in steps.OrderBy(s => s.NormalizedStepNumber))
+                {
+                    sb.AppendLine($"Step {step.NormalizedStepNumber} ({step.NormalizedMarks} mark{(step.NormalizedMarks != 1 ? "s" : "")}):");
+                    sb.AppendLine($"  Expected: {step.NormalizedDescription}");
+                    if (step.Keywords.Any())
+                    {
+                        sb.AppendLine($"  Keywords: {string.Join(", ", step.Keywords)}");
+                    }
+                    sb.AppendLine();
+                }
+                
+                if (!string.IsNullOrEmpty(rubric.ModelAnswer))
+                {
+                    sb.AppendLine("MODEL ANSWER:");
+                    sb.AppendLine(rubric.ModelAnswer);
+                }
+                
+                rubric.RubricText = sb.ToString();
+                
+                _logger.LogDebug(
+                    "[RUBRIC_NORMALIZED] QuestionId={QuestionId}, Steps={StepCount}, TotalMarks={TotalMarks}",
+                    rubric.QuestionId, steps.Count, rubric.TotalMarks);
+            }
+            
+            // Also populate Keywords from steps if empty
+            if (!rubric.Keywords.Any() && steps.Count > 0)
+            {
+                rubric.Keywords = steps
+                    .SelectMany(s => s.Keywords)
+                    .Distinct()
+                    .ToList();
             }
         }
     }
