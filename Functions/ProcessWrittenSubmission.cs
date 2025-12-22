@@ -669,17 +669,23 @@ namespace SmartStudyFunc.Functions
                 // Format extracted answer with line breaks
                 var formattedAnswer = FormatExtractedAnswerWithLineBreaks(q.ExtractedAnswer);
 
-                // Parse rubric breakdown from JSON string to object
-                object rubricObj = new { };
+                // Parse rubric breakdown from JSON string to object and ensure extractedAnswer is included
+                object rubricObj = new { extractedAnswer = formattedAnswer };
                 if (!string.IsNullOrEmpty(q.RubricBreakdown) && q.RubricBreakdown.Trim().StartsWith("{"))
                 {
                     try
                     {
-                        rubricObj = JsonSerializer.Deserialize<JsonElement>(q.RubricBreakdown);
+                        var parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(q.RubricBreakdown);
+                        if (parsed != null)
+                        {
+                            // Always ensure extractedAnswer is in the rubricBreakdown
+                            parsed["extractedAnswer"] = JsonSerializer.SerializeToElement(formattedAnswer);
+                            rubricObj = parsed;
+                        }
                     }
                     catch
                     {
-                        rubricObj = new { raw = q.RubricBreakdown };
+                        rubricObj = new { raw = q.RubricBreakdown, extractedAnswer = formattedAnswer };
                     }
                 }
 
