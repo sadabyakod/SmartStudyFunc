@@ -629,13 +629,16 @@ namespace SmartStudyFunc.Functions
 
             var blobClient = containerClient.GetBlobClient(blobPath);
 
+            // Transform result for better mobile app display
+            var apiResult = TransformForApi(result);
+
             // Serialize evaluation result to JSON with pretty formatting for readability
             var jsonOptions = new JsonSerializerOptions
             {
                 WriteIndented = true,
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             };
-            var json = JsonSerializer.Serialize(result, jsonOptions);
+            var json = JsonSerializer.Serialize(apiResult, jsonOptions);
 
             using var stream = new System.IO.MemoryStream(
                 System.Text.Encoding.UTF8.GetBytes(json));
@@ -652,6 +655,94 @@ namespace SmartStudyFunc.Functions
             await blobClient.UploadAsync(stream, uploadOptions, cancellationToken: cancellationToken);
 
             return $"{containerName}/{blobPath}";
+        }
+
+        /// <summary>
+        /// Transform evaluation result for API - format extracted answers and parse rubric breakdown
+        /// </summary>
+        private object TransformForApi(WrittenEvaluationResult result)
+        {
+            var questionEvals = new List<object>();
+            
+            foreach (var q in result.QuestionEvaluations)
+            {
+                // Format extracted answer with line breaks
+                var formattedAnswer = FormatExtractedAnswerWithLineBreaks(q.ExtractedAnswer);
+
+                // Parse rubric breakdown from JSON string to object
+                object rubricObj = new { };
+                if (!string.IsNullOrEmpty(q.RubricBreakdown) && q.RubricBreakdown.Trim().StartsWith("{"))
+                {
+                    try
+                    {
+                        rubricObj = JsonSerializer.Deserialize<JsonElement>(q.RubricBreakdown);
+                    }
+                    catch
+                    {
+                        rubricObj = new { raw = q.RubricBreakdown };
+                    }
+                }
+
+                questionEvals.Add(new
+                {
+                    questionId = q.QuestionId,
+                    questionNumber = q.QuestionNumber,
+                    questionText = q.QuestionText,
+                    extractedAnswer = formattedAnswer,
+                    modelAnswer = q.ModelAnswer,
+                    maxScore = q.MaxScore,
+                    awardedScore = q.AwardedScore,
+                    feedback = q.Feedback,
+                    rubricBreakdown = rubricObj,
+                    evaluatedAt = q.EvaluatedAt,
+                    isMcq = q.IsMcq
+                });
+            }
+
+            return new
+            {
+                writtenSubmissionId = result.WrittenSubmissionId,
+                examId = result.ExamId,
+                studentId = result.StudentId,
+                evaluatedAt = result.EvaluatedAt,
+                summary = new
+                {
+                    totalScore = result.TotalScore,
+                    maxPossibleScore = result.MaxPossibleScore,
+                    percentage = result.Percentage,
+                    grade = result.Grade
+                },
+                evaluationResult = new
+                {
+                    totalScore = result.TotalScore,
+                    maxPossibleScore = result.MaxPossibleScore,
+                    percentage = result.Percentage,
+                    grade = result.Grade,
+                    mcqScore = result.McqScore,
+                    mcqMaxScore = result.McqMaxScore,
+                    mcqCount = result.McqCount,
+                    subjectiveScore = result.SubjectiveScore,
+                    subjectiveMaxScore = result.SubjectiveMaxScore,
+                    subjectiveCount = result.SubjectiveCount,
+                    questionEvaluations = questionEvals
+                }
+            };
+        }
+
+        /// <summary>
+        /// Format extracted answer with line breaks for better readability
+        /// Detects natural breaks in mathematical solutions
+        /// </summary>
+        private string FormatExtractedAnswerWithLineBreaks(string text)
+        {
+            if (string.IsNullOrEmpty(text) || text.Contains("\n"))
+                return text; // Already has line breaks or empty
+
+            // Add line breaks after common patterns in math solutions
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"(\d+[a-z]*\s*=\s*[^=]+?)(?=\s+\d+[a-z]*\s*=)", "$1\n");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"([a-z]\s*=\s*[^=]+?)(?=\s+[a-z]\s*=)", "$1\n");
+            
+            return text;
         }
 
         /// <summary>
