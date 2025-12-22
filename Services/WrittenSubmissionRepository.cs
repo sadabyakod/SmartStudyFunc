@@ -55,13 +55,16 @@ namespace SmartStudyFunc.Services
     {
         private readonly string _connectionString;
         private readonly ILogger<WrittenSubmissionRepository> _logger;
+        private readonly IRubricBlobService? _rubricBlobService;
 
         public WrittenSubmissionRepository(
             string connectionString,
-            ILogger<WrittenSubmissionRepository> logger)
+            ILogger<WrittenSubmissionRepository> logger,
+            IRubricBlobService? rubricBlobService = null)
         {
             _connectionString = connectionString;
             _logger = logger;
+            _rubricBlobService = rubricBlobService;
         }
 
         public async Task<WrittenSubmission?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -273,8 +276,19 @@ namespace SmartStudyFunc.Services
             string examId,
             CancellationToken cancellationToken = default)
         {
-            // ONLY USE GeneratedExams table - never fallback to ExamQuestions
-            _logger.LogInformation("Loading questions from GeneratedExams table for exam {ExamId}", examId);
+            // Try V2 tables first (GeneratedExamPapers + GeneratedExamQuestions with blob rubrics)
+            _logger.LogInformation("Loading questions for exam {ExamId}", examId);
+            
+            var questionsV2 = await GetQuestionsFromV2TablesAsync(examId, cancellationToken);
+            if (questionsV2.Count > 0)
+            {
+                _logger.LogInformation("✓ Found {Count} questions in V2 tables (GeneratedExamQuestions) for exam {ExamId}", 
+                    questionsV2.Count, examId);
+                return questionsV2;
+            }
+            
+            // Fallback to GeneratedExams table
+            _logger.LogInformation("V2 tables empty, trying GeneratedExams table for exam {ExamId}", examId);
             var questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
             
             if (questions.Count > 0)
@@ -284,7 +298,124 @@ namespace SmartStudyFunc.Services
             }
             else
             {
-                _logger.LogError("✗ No questions found in GeneratedExams table for exam {ExamId}", examId);
+                _logger.LogError("✗ No questions found in any table for exam {ExamId}", examId);
+            }
+
+            return questions;
+        }
+
+        /// <summary>
+        /// Get questions from V2 tables (GeneratedExamPapers + GeneratedExamQuestions) with rubrics from blob storage
+        /// </summary>
+        private async Task<List<ExamQuestionWithRubric>> GetQuestionsFromV2TablesAsync(
+            string examId,
+            CancellationToken cancellationToken)
+        {
+            // First check if paper exists with this ExamId
+            const string sql = @"
+                SELECT q.QuestionId, q.QuestionNumber, q.QuestionText, q.ModelAnswer,
+                       q.TotalMarks, q.RubricBlobPath, q.Keywords, q.Topic,
+                       q.QuestionType, q.McqOptions, q.CorrectOption,
+                       p.Subject, p.Grade, p.Chapter, p.PaperId
+                FROM GeneratedExamQuestions q
+                INNER JOIN GeneratedExamPapers p ON q.PaperId = p.PaperId
+                WHERE p.ExamId = @ExamId AND q.IsActive = 1 AND p.IsActive = 1
+                ORDER BY q.QuestionNumber";
+
+            var questions = new List<ExamQuestionWithRubric>();
+
+            try
+            {
+                await using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(cancellationToken);
+
+                await using var command = new SqlCommand(sql, connection);
+                command.CommandTimeout = 30;
+                command.Parameters.AddWithValue("@ExamId", examId);
+
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var questionId = reader.GetString(0);
+                    var questionNumber = reader.GetInt32(1);
+                    var questionText = reader.GetString(2);
+                    var modelAnswer = reader.IsDBNull(3) ? "" : reader.GetString(3);
+                    var totalMarks = reader.GetInt32(4);
+                    var rubricBlobPath = reader.IsDBNull(5) ? null : reader.GetString(5);
+                    var keywordsJson = reader.IsDBNull(6) ? null : reader.GetString(6);
+                    var topic = reader.IsDBNull(7) ? null : reader.GetString(7);
+                    var questionType = reader.IsDBNull(8) ? "subjective" : reader.GetString(8);
+                    var mcqOptionsJson = reader.IsDBNull(9) ? null : reader.GetString(9);
+                    var correctOption = reader.IsDBNull(10) ? null : reader.GetString(10);
+                    var subject = reader.IsDBNull(11) ? null : reader.GetString(11);
+                    var grade = reader.IsDBNull(12) ? null : reader.GetString(12);
+                    var chapter = reader.IsDBNull(13) ? null : reader.GetString(13);
+
+                    // Parse keywords
+                    var keywords = new List<string>();
+                    if (!string.IsNullOrEmpty(keywordsJson))
+                    {
+                        try { keywords = System.Text.Json.JsonSerializer.Deserialize<List<string>>(keywordsJson) ?? new(); } catch { }
+                    }
+
+                    // Parse MCQ options
+                    var mcqOptions = new List<string>();
+                    if (!string.IsNullOrEmpty(mcqOptionsJson))
+                    {
+                        try { mcqOptions = System.Text.Json.JsonSerializer.Deserialize<List<string>>(mcqOptionsJson) ?? new(); } catch { }
+                    }
+
+                    var isMcq = questionType.Equals("mcq", StringComparison.OrdinalIgnoreCase) || mcqOptions.Count > 0;
+
+                    // Build rubric - try to load from blob if available
+                    var rubric = $"Topic: {topic ?? chapter ?? subject ?? "General"}. Evaluate based on correct answer and understanding of concepts.";
+                    
+                    if (!string.IsNullOrEmpty(rubricBlobPath) && _rubricBlobService != null)
+                    {
+                        try
+                        {
+                            var rubricFromBlob = await _rubricBlobService.GetRubricAsync(rubricBlobPath, cancellationToken);
+                            if (rubricFromBlob != null && !string.IsNullOrEmpty(rubricFromBlob.RubricText))
+                            {
+                                rubric = rubricFromBlob.RubricText;
+                                
+                                // Also use keywords from rubric if not in SQL
+                                if (rubricFromBlob.Keywords.Any() && !keywords.Any())
+                                {
+                                    keywords = rubricFromBlob.Keywords;
+                                }
+                                
+                                _logger.LogDebug("Loaded rubric from blob for Q{QuestionNumber}", questionNumber);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to load rubric from blob for Q{QuestionNumber}", questionNumber);
+                        }
+                    }
+
+                    questions.Add(new ExamQuestionWithRubric
+                    {
+                        QuestionId = questionId,
+                        QuestionNumber = questionNumber,
+                        QuestionText = questionText,
+                        ModelAnswer = modelAnswer,
+                        MaxScore = totalMarks,
+                        Rubric = rubric,
+                        Keywords = keywords,
+                        ClassName = grade,
+                        Subject = subject,
+                        Chapter = chapter ?? topic,
+                        IsMcq = isMcq,
+                        McqOptions = mcqOptions
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                // V2 tables may not exist yet - this is expected during transition
+                _logger.LogDebug(ex, "V2 tables query failed (may not exist yet) for exam {ExamId}", examId);
             }
 
             return questions;

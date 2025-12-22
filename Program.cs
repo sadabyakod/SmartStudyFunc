@@ -146,13 +146,22 @@ var host = new HostBuilder()
             return new DualOcrService(googleOcr, azureOcr, logger);
         });
 
-        // Register Written Submission Repository
+        // Register Written Submission Repository (with RubricBlobService for V2 tables)
         services.AddSingleton<IWrittenSubmissionRepository>(sp =>
         {
             var connectionString = configuration["SqlConnectionString"] 
                 ?? configuration.GetConnectionString("SqlDb");
             var logger = sp.GetRequiredService<ILogger<WrittenSubmissionRepository>>();
-            return new WrittenSubmissionRepository(connectionString!, logger);
+            var rubricBlobService = sp.GetRequiredService<IRubricBlobService>();
+            return new WrittenSubmissionRepository(connectionString!, logger, rubricBlobService);
+        });
+
+        // Register Rubric Blob Service for storing/fetching question rubrics
+        services.AddSingleton<IRubricBlobService>(sp =>
+        {
+            var blobServiceClient = sp.GetRequiredService<BlobServiceClient>();
+            var logger = sp.GetRequiredService<ILogger<RubricBlobService>>();
+            return new RubricBlobService(blobServiceClient, logger);
         });
 
         // Register Syllabus RAG Service for step-wise board blueprint evaluation
