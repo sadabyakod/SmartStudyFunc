@@ -96,20 +96,38 @@ namespace SmartStudyFunc.Services
                         DeploymentName = _deploymentName,
                         Messages =
                         {
-                            new ChatRequestSystemMessage(@"You are a strict Karnataka PUC Mathematics examiner. 
-You evaluate answers based on: 
-1) Mathematical correctness and accuracy
-2) Step-by-step methodology
-3) Use of correct formulas and theorems
-4) Clear presentation and notation
-5) Coverage of key concepts
+                            new ChatRequestSystemMessage(@"You are a STRICT school exam evaluator following Indian Board Exam standards.
 
-Award marks strictly. Partial marks only for partial understanding.
-Respond ONLY with valid JSON, no markdown, no explanations."),
+YOUR ROLE:
+- Evaluate each step of student's answer against the model (rubric) step
+- Assign marks for each step
+- Calculate the total score
+- Follow CBSE/State Board correction standards strictly
+
+STRICT RULES:
+- Each step carries EXACTLY 1 mark (or as defined)
+- Be STRICT and DETERMINISTIC
+- Do NOT infer missing steps
+- Do NOT be generous
+- Judge ONLY what is written by the student
+- Same input MUST always produce the same output
+- Copied formula without working → 0 marks for that step
+- Incomplete step → 0 marks (no partial within a step)
+- Wrong method even with right answer → 0 marks for method step
+
+MARKING STANDARDS:
+Step Type        | Full Marks (1) | Zero Marks (0)
+----------------|----------------|----------------
+Formula/Method  | Correct formula written | Missing/wrong formula
+Substitution    | Correct values substituted | Wrong/no substitution
+Calculation     | Correct arithmetic | Wrong calculation
+Final Answer    | Correct with units | Wrong answer/no units
+
+Return STRICT JSON ONLY. No markdown. No explanations outside JSON."),
                             new ChatRequestUserMessage(prompt)
                         },
-                        Temperature = 0.2f,  // Low temperature for consistent evaluation
-                        MaxTokens = 1500,
+                        Temperature = 0.0f,  // Zero temperature for deterministic evaluation
+                        MaxTokens = 1200,
                         ResponseFormat = ChatCompletionsResponseFormat.JsonObject
                     };
 
@@ -264,7 +282,8 @@ Respond ONLY with valid JSON, no markdown, no explanations."),
         }
 
         /// <summary>
-        /// Build Karnataka PUC Mathematics-specific evaluation prompt
+        /// Build STRICT Indian Board Exam evaluation prompt
+        /// Each step = 1 mark, deterministic scoring
         /// </summary>
         private string BuildKarnatakaPucPrompt(
             string studentAnswer,
@@ -274,65 +293,59 @@ Respond ONLY with valid JSON, no markdown, no explanations."),
         {
             var keywordsList = keywords.Any() ? string.Join(", ", keywords) : "Not specified";
 
-            return $@"You are an experienced Karnataka PUC Board Mathematics examiner. Evaluate this answer EXACTLY like a real board exam evaluator.
+            return $@"You are a STRICT school exam evaluator. Evaluate this answer following Indian Board Exam standards.
 
-**IDEAL/MODEL ANSWER:**
+**MODEL ANSWER (RUBRIC):**
 {idealAnswer}
 
 **STUDENT'S ANSWER:**
 {studentAnswer}
 
 **MAXIMUM MARKS:** {maxMarks}
-**KEY CONCEPTS TO CHECK:** {keywordsList}
+**KEY CONCEPTS:** {keywordsList}
 
-**EVALUATION RULES (Follow Karnataka PUC Board Standards):**
-1. Award marks STEP-BY-STEP - each logical step gets separate marks
-2. Give PARTIAL MARKS for:
-   - Correct approach but wrong final answer
-   - Correct formula written but calculation error
-   - Incomplete steps that show understanding
-3. DEDUCT marks for:
-   - Missing steps (even if answer is correct)
-   - Wrong formulas or theorems
-   - Calculation errors
-   - Poor presentation
-4. If answer is INCOMPLETE, clearly state what is missing
+**STRICT EVALUATION RULES:**
+1. Each step carries EXACTLY 1 mark (total steps = {maxMarks})
+2. Be STRICT - do NOT be generous
+3. Do NOT infer missing steps
+4. Judge ONLY what is written
+5. Same input MUST always produce same output
 
-**STEP-WISE MARKING SCHEME:**
-- Divide the solution into logical steps
-- Assign marks to each step based on its importance
-- Award 0, partial, or full marks for each step
-- Sum up for total score
+**STEP-WISE MARKING:**
+- Step written correctly and completely → 1 mark
+- Step missing, wrong, or incomplete → 0 marks
+- NO partial marks within a step
 
-**REQUIRED JSON RESPONSE:**
+**MARKING CRITERIA:**
+| Step Type | 1 Mark (Full) | 0 Marks (Zero) |
+|-----------|---------------|----------------|
+| Formula/Method | Correct formula written | Missing/wrong |
+| Substitution | Correct values | Wrong values |
+| Calculation | Correct arithmetic | Wrong calculation |
+| Final Answer | Correct with units | Wrong/no units |
+
+**REQUIRED JSON RESPONSE (STRICT FORMAT):**
 {{
-  ""score"": <total marks awarded (0 to {maxMarks})>,
-  ""isComplete"": <true if answer is complete, false if incomplete>,
+  ""score"": <integer 0 to {maxMarks}>,
+  ""isComplete"": <true/false>,
   ""completionStatus"": ""Complete"" | ""Partial"" | ""Incomplete"",
-  ""completionPercentage"": <percentage of answer completed>,
   ""stepWiseBreakdown"": [
     {{
       ""stepNumber"": 1,
-      ""stepDescription"": ""<what this step should contain>"",
-      ""maxMarks"": <marks allocated for this step>,
-      ""marksAwarded"": <marks given>,
-      ""status"": ""Complete"" | ""Partial"" | ""Missing"" | ""Incorrect"",
-      ""feedback"": ""<specific feedback for this step>""
+      ""stepDescription"": ""<step description>"",
+      ""maxMarks"": 1,
+      ""marksAwarded"": <0 or 1>,
+      ""status"": ""Correct"" | ""Incorrect"" | ""Missing"",
+      ""feedback"": ""<reason for marks>""
     }}
   ],
-  ""feedback"": ""<overall 2-3 sentence summary>"",
-  ""missingPoints"": [""<missing concept 1>"", ""<missing concept 2>""],
-  ""strengths"": [""<what student did well>""],
-  ""improvement"": ""<specific actionable suggestion>""
+  ""feedback"": ""<overall summary>"",
+  ""missingPoints"": [""<missing items>""],
+  ""strengths"": [""<correct items>""],
+  ""improvement"": ""<suggestion>""
 }}
 
-**IMPORTANT:** 
-- Be STRICT but FAIR like a real examiner
-- Award step marks even if final answer is wrong
-- Penalize missing working/steps
-- Provide constructive feedback for each step
-
-Respond ONLY with valid JSON.";
+Return STRICT JSON ONLY. No markdown.";
         }
 
         /// <summary>
