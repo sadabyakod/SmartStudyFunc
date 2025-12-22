@@ -680,23 +680,32 @@ namespace SmartStudyFunc.Functions
                 else
                 {
                     // Subjective: parse and ensure extractedAnswer is included
-                    rubricObj = new { extractedAnswer = formattedAnswer };
                     if (!string.IsNullOrEmpty(q.RubricBreakdown) && q.RubricBreakdown.Trim().StartsWith("{"))
                     {
                         try
                         {
-                            var parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(q.RubricBreakdown);
-                            if (parsed != null)
+                            // Parse to JsonDocument for proper re-serialization
+                            using var doc = JsonDocument.Parse(q.RubricBreakdown);
+                            var dict = new Dictionary<string, object>();
+                            
+                            // Copy all existing properties
+                            foreach (var prop in doc.RootElement.EnumerateObject())
                             {
-                                // Always ensure extractedAnswer is in the rubricBreakdown
-                                parsed["extractedAnswer"] = JsonSerializer.SerializeToElement(formattedAnswer);
-                                rubricObj = parsed;
+                                dict[prop.Name] = ConvertJsonElement(prop.Value);
                             }
+                            
+                            // Always ensure extractedAnswer is in the rubricBreakdown
+                            dict["extractedAnswer"] = formattedAnswer;
+                            rubricObj = dict;
                         }
                         catch
                         {
                             rubricObj = new { raw = q.RubricBreakdown, extractedAnswer = formattedAnswer };
                         }
+                    }
+                    else
+                    {
+                        rubricObj = new { extractedAnswer = formattedAnswer };
                     }
                 }
 
@@ -744,6 +753,51 @@ namespace SmartStudyFunc.Functions
                     questionEvaluations = questionEvals
                 }
             };
+        }
+
+        /// <summary>
+        /// Convert JsonElement to proper .NET object for correct serialization
+        /// </summary>
+        private object? ConvertJsonElement(JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case JsonValueKind.Object:
+                    var dict = new Dictionary<string, object?>();
+                    foreach (var prop in element.EnumerateObject())
+                    {
+                        dict[prop.Name] = ConvertJsonElement(prop.Value);
+                    }
+                    return dict;
+                    
+                case JsonValueKind.Array:
+                    var list = new List<object?>();
+                    foreach (var item in element.EnumerateArray())
+                    {
+                        list.Add(ConvertJsonElement(item));
+                    }
+                    return list;
+                    
+                case JsonValueKind.String:
+                    return element.GetString();
+                    
+                case JsonValueKind.Number:
+                    if (element.TryGetInt32(out int intVal))
+                        return intVal;
+                    if (element.TryGetInt64(out long longVal))
+                        return longVal;
+                    return element.GetDouble();
+                    
+                case JsonValueKind.True:
+                    return true;
+                    
+                case JsonValueKind.False:
+                    return false;
+                    
+                case JsonValueKind.Null:
+                default:
+                    return null;
+            }
         }
 
         /// <summary>
