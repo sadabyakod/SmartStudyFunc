@@ -287,8 +287,18 @@ namespace SmartStudyFunc.Services
                 return questionsV2;
             }
             
-            // Fallback to GeneratedExams table
-            _logger.LogInformation("V2 tables empty, trying GeneratedExams table for exam {ExamId}", examId);
+            // Try SubjectiveRubrics table (backend's rubric lookup table)
+            _logger.LogInformation("V2 tables empty, trying SubjectiveRubrics + GeneratedExams for exam {ExamId}", examId);
+            var questionsWithSubjectiveRubrics = await GetQuestionsWithSubjectiveRubricsAsync(examId, cancellationToken);
+            if (questionsWithSubjectiveRubrics.Count > 0)
+            {
+                _logger.LogInformation("✓ Found {Count} questions with SubjectiveRubrics for exam {ExamId}", 
+                    questionsWithSubjectiveRubrics.Count, examId);
+                return questionsWithSubjectiveRubrics;
+            }
+            
+            // Fallback to GeneratedExams table only (no SubjectiveRubrics)
+            _logger.LogInformation("SubjectiveRubrics empty, trying GeneratedExams table only for exam {ExamId}", examId);
             var questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
             
             if (questions.Count > 0)
@@ -302,6 +312,128 @@ namespace SmartStudyFunc.Services
             }
 
             return questions;
+        }
+        
+        /// <summary>
+        /// Get questions from GeneratedExams table and load frozen rubrics from SubjectiveRubrics + Blob.
+        /// This is the backend's pattern: SubjectiveRubrics is an index pointing to blob rubrics.
+        /// </summary>
+        private async Task<List<ExamQuestionWithRubric>> GetQuestionsWithSubjectiveRubricsAsync(
+            string examId,
+            CancellationToken cancellationToken)
+        {
+            // First, get the rubric mappings from SubjectiveRubrics table
+            var rubricMappings = await GetSubjectiveRubricMappingsAsync(examId, cancellationToken);
+            if (rubricMappings.Count == 0)
+            {
+                return new List<ExamQuestionWithRubric>();
+            }
+            
+            // Load questions from GeneratedExams
+            var questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
+            if (questions.Count == 0)
+            {
+                return new List<ExamQuestionWithRubric>();
+            }
+            
+            // Enrich questions with frozen rubrics from blob storage
+            foreach (var question in questions)
+            {
+                if (rubricMappings.TryGetValue(question.QuestionId, out var rubricInfo))
+                {
+                    // Load rubric from blob using the path from SubjectiveRubrics
+                    if (!string.IsNullOrEmpty(rubricInfo.BlobPath) && _rubricBlobService != null)
+                    {
+                        try
+                        {
+                            var rubricFromBlob = await _rubricBlobService.GetRubricAsync(rubricInfo.BlobPath, cancellationToken);
+                            if (rubricFromBlob != null)
+                            {
+                                // Use frozen rubric from blob (canonical source for deterministic evaluation)
+                                if (!string.IsNullOrEmpty(rubricFromBlob.RubricText))
+                                {
+                                    question.Rubric = rubricFromBlob.RubricText;
+                                }
+                                
+                                // Use model answer from blob if available
+                                if (!string.IsNullOrEmpty(rubricFromBlob.ModelAnswer))
+                                {
+                                    question.ModelAnswer = rubricFromBlob.ModelAnswer;
+                                }
+                                
+                                // Use keywords from blob
+                                if (rubricFromBlob.Keywords.Any())
+                                {
+                                    question.Keywords = rubricFromBlob.Keywords;
+                                }
+                                
+                                // Override max score with value from SubjectiveRubrics (authoritative)
+                                question.MaxScore = rubricInfo.TotalMarks;
+                                
+                                _logger.LogDebug(
+                                    "[FROZEN_RUBRIC] Loaded from SubjectiveRubrics for Q{QuestionId}, TotalMarks={TotalMarks}", 
+                                    question.QuestionId, rubricInfo.TotalMarks);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, 
+                                "[FROZEN_RUBRIC_FAILED] Could not load blob for Q{QuestionId}, BlobPath={BlobPath}", 
+                                question.QuestionId, rubricInfo.BlobPath);
+                        }
+                    }
+                }
+            }
+            
+            return questions;
+        }
+        
+        /// <summary>
+        /// Get rubric mappings from SubjectiveRubrics table.
+        /// Returns: Dictionary of QuestionId -> (TotalMarks, BlobPath)
+        /// </summary>
+        private async Task<Dictionary<string, (int TotalMarks, string? BlobPath)>> GetSubjectiveRubricMappingsAsync(
+            string examId,
+            CancellationToken cancellationToken)
+        {
+            const string sql = @"
+                SELECT QuestionId, TotalMarks, RubricBlobPath
+                FROM SubjectiveRubrics
+                WHERE ExamId = @ExamId";
+
+            var mappings = new Dictionary<string, (int TotalMarks, string? BlobPath)>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                await using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync(cancellationToken);
+
+                await using var command = new SqlCommand(sql, connection);
+                command.CommandTimeout = 30;
+                command.Parameters.AddWithValue("@ExamId", examId);
+
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var questionId = reader.GetString(0);
+                    var totalMarks = reader.GetInt32(1);
+                    var blobPath = reader.IsDBNull(2) ? null : reader.GetString(2);
+                    
+                    mappings[questionId] = (totalMarks, blobPath);
+                }
+
+                _logger.LogInformation(
+                    "[SUBJECTIVE_RUBRICS] Found {Count} rubric mappings for exam {ExamId}", 
+                    mappings.Count, examId);
+            }
+            catch (Exception ex)
+            {
+                // SubjectiveRubrics table may not exist - this is expected during transition
+                _logger.LogDebug(ex, "[SUBJECTIVE_RUBRICS] Table query failed (may not exist) for exam {ExamId}", examId);
+            }
+
+            return mappings;
         }
 
         /// <summary>
