@@ -546,6 +546,7 @@ FEEDBACK STYLE:
                                 questionNumber = q.QuestionNumber,
                                 maxScore = q.MaxScore,
                                 awardedScore = result?.AwardedScore ?? 0,
+                                extractedAnswer = answer,
                                 stepWiseBreakdown = result?.StepWiseBreakdown ?? new List<StepWiseBreakdownItem>(),
                                 keywords = q.Keywords,
                                 rubric = q.Rubric,
@@ -596,6 +597,7 @@ FEEDBACK STYLE:
                     questionNumber = q.QuestionNumber,
                     maxScore = q.MaxScore,
                     awardedScore = 0,
+                    extractedAnswer = answer,
                     stepWiseBreakdown = new[]
                     {
                         new { step = "Overall evaluation", awardedMarks = 0, maxMarks = (double)q.MaxScore, comment = "Evaluation parsing failed or API error" }

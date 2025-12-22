@@ -182,6 +182,7 @@ namespace SmartStudyFunc.Functions
                     // Create rubric breakdown JSON with step-wise marks
                     var rubricBreakdown = JsonConvert.SerializeObject(new
                     {
+                        ExtractedAnswer = request.StudentAnswerText ?? request.ExtractedText ?? "",
                         KeywordsMatched = scoringResult.KeywordsMatched,
                         MissingKeywords = scoringResult.MissingKeywords,
                         Strengths = scoringResult.Strengths,

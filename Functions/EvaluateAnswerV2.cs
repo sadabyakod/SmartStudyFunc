@@ -252,6 +252,7 @@ namespace SmartStudyFunc.Functions
                 ConfidenceScore = result.ConfidenceScore,
                 NeedsReview = result.NeedsReview,
                 EvaluationReason = result.EvaluationReason,
+                ExtractedAnswer = request.StudentAnswerText ?? request.ExtractedText ?? "",
                 KeywordsMatched = result.MatchedKeywords,
                 MissingKeywords = result.MissingKeywords,
                 Strengths = result.Strengths,
