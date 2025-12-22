@@ -669,23 +669,34 @@ namespace SmartStudyFunc.Functions
                 // Format extracted answer with line breaks
                 var formattedAnswer = FormatExtractedAnswerWithLineBreaks(q.ExtractedAnswer);
 
-                // Parse rubric breakdown from JSON string to object and ensure extractedAnswer is included
-                object rubricObj = new { extractedAnswer = formattedAnswer };
-                if (!string.IsNullOrEmpty(q.RubricBreakdown) && q.RubricBreakdown.Trim().StartsWith("{"))
+                // For MCQ, keep rubricBreakdown as empty string
+                // For subjective, parse and inject extractedAnswer
+                object rubricObj;
+                if (q.IsMcq)
                 {
-                    try
+                    // MCQ: keep as-is (empty string or original)
+                    rubricObj = q.RubricBreakdown ?? "";
+                }
+                else
+                {
+                    // Subjective: parse and ensure extractedAnswer is included
+                    rubricObj = new { extractedAnswer = formattedAnswer };
+                    if (!string.IsNullOrEmpty(q.RubricBreakdown) && q.RubricBreakdown.Trim().StartsWith("{"))
                     {
-                        var parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(q.RubricBreakdown);
-                        if (parsed != null)
+                        try
                         {
-                            // Always ensure extractedAnswer is in the rubricBreakdown
-                            parsed["extractedAnswer"] = JsonSerializer.SerializeToElement(formattedAnswer);
-                            rubricObj = parsed;
+                            var parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(q.RubricBreakdown);
+                            if (parsed != null)
+                            {
+                                // Always ensure extractedAnswer is in the rubricBreakdown
+                                parsed["extractedAnswer"] = JsonSerializer.SerializeToElement(formattedAnswer);
+                                rubricObj = parsed;
+                            }
                         }
-                    }
-                    catch
-                    {
-                        rubricObj = new { raw = q.RubricBreakdown, extractedAnswer = formattedAnswer };
+                        catch
+                        {
+                            rubricObj = new { raw = q.RubricBreakdown, extractedAnswer = formattedAnswer };
+                        }
                     }
                 }
 
