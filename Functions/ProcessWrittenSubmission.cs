@@ -897,7 +897,7 @@ namespace SmartStudyFunc.Functions
                         QuestionText = question.QuestionText,
                         StudentAnswer = extractedText, // Full text for now - V2 engine will extract relevant part
                         ModelAnswer = question.ModelAnswer,
-                        MaxMarks = question.MaxScore,
+                        MaxMarks = (double)question.MaxScore,
                         Subject = ParseSubjectCategory(question.Subject ?? "Unknown")
                     };
 
@@ -916,9 +916,9 @@ namespace SmartStudyFunc.Functions
                         ExtractedAnswer = extractedText,
                         ModelAnswer = question.ModelAnswer,
                         MaxScore = question.MaxScore,
-                        AwardedScore = (decimal)engineResult.Score,
-                        Feedback = engineResult.Reasoning,
-                        RubricBreakdown = JsonSerializer.Serialize(engineResult.Details),
+                        AwardedScore = (decimal)engineResult.MarksAwarded,
+                        Feedback = engineResult.StudentFeedback,
+                        RubricBreakdown = JsonSerializer.Serialize(engineResult.StepWiseBreakdown),
                         EvaluatedAt = DateTime.UtcNow,
                         IsMcq = false
                     };
@@ -930,7 +930,7 @@ namespace SmartStudyFunc.Functions
 
                     _logger.LogInformation(
                         "[V2_QUESTION_EVALUATED] Q{QuestionNumber}: Score={Score}/{Max}, Engine={Engine}",
-                        question.QuestionNumber, evaluation.AwardedScore, evaluation.MaxScore, engineResult.EngineType);
+                        question.QuestionNumber, evaluation.AwardedScore, evaluation.MaxScore, engineResult.ProcessedBy);
                 }
                 catch (Exception ex)
                 {
