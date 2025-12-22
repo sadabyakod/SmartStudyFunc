@@ -297,21 +297,28 @@ namespace SmartStudyFunc.Services
                 return questionsWithSubjectiveRubrics;
             }
             
-            // Fallback to GeneratedExams table only (no SubjectiveRubrics)
-            _logger.LogInformation("SubjectiveRubrics empty, trying GeneratedExams table only for exam {ExamId}", examId);
-            var questions = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
-            
-            if (questions.Count > 0)
+            // Try GeneratedExams table (JSON-based exam storage)
+            _logger.LogInformation("SubjectiveRubrics empty, trying GeneratedExams table for exam {ExamId}", examId);
+            var questionsFromGenerated = await GetQuestionsFromGeneratedExamsTableAsync(examId, cancellationToken);
+            if (questionsFromGenerated.Count > 0)
             {
                 _logger.LogInformation("✓ Found {Count} questions in GeneratedExams table for exam {ExamId}", 
-                    questions.Count, examId);
+                    questionsFromGenerated.Count, examId);
+                return questionsFromGenerated;
             }
-            else
+            
+            // Fallback to ExamQuestions table (legacy storage)
+            _logger.LogInformation("GeneratedExams empty, trying ExamQuestions table for exam {ExamId}", examId);
+            var questionsFromLegacy = await GetQuestionsFromExamQuestionsTableAsync(examId, cancellationToken);
+            if (questionsFromLegacy.Count > 0)
             {
-                _logger.LogError("✗ No questions found in any table for exam {ExamId}", examId);
+                _logger.LogInformation("✓ Found {Count} questions in ExamQuestions table for exam {ExamId}", 
+                    questionsFromLegacy.Count, examId);
+                return questionsFromLegacy;
             }
-
-            return questions;
+            
+            _logger.LogError("✗ No questions found in any table for exam {ExamId}", examId);
+            return new List<ExamQuestionWithRubric>();
         }
         
         /// <summary>
