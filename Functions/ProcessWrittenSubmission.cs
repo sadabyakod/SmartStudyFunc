@@ -242,8 +242,7 @@ namespace SmartStudyFunc.Functions
 
                 ocrStopwatch.Stop();
 
-                var extractedText = ocrResult.NormalizedText;
-                var extractedTextJson = JsonSerializer.Serialize(ocrResult.Pages);
+                var extractedTextJson = JsonSerializer.Serialize(new { text = extractedText });
                 string? textBlobPath = null;
 
                 // Store large text in blob storage
@@ -254,13 +253,13 @@ namespace SmartStudyFunc.Functions
                     
                     _logger.LogInformation(
                         "[OCR_COMPLETED] SubmissionId={SubmissionId}, Chars={CharCount} (stored in blob), Confidence={Confidence:P2}, DurationMs={Duration}",
-                        submissionId, extractedText.Length, ocrResult.AverageConfidence, ocrStopwatch.ElapsedMilliseconds);
+                        submissionId, extractedText.Length, avgConfidence, ocrStopwatch.ElapsedMilliseconds);
                 }
                 else
                 {
                     _logger.LogInformation(
                         "[OCR_COMPLETED] SubmissionId={SubmissionId}, Chars={CharCount}, Confidence={Confidence:P2}, DurationMs={Duration}",
-                        submissionId, extractedText.Length, ocrResult.AverageConfidence, ocrStopwatch.ElapsedMilliseconds);
+                        submissionId, extractedText.Length, avgConfidence, ocrStopwatch.ElapsedMilliseconds);
                 }
 
                 await _repository.SaveExtractedTextAsync(
@@ -882,7 +881,7 @@ namespace SmartStudyFunc.Functions
 
             var result = new WrittenEvaluationResult
             {
-                QuestionEvaluations = new System.Collections.Generic.List<QuestionEvaluation>()
+                QuestionEvaluations = new System.Collections.Generic.List<WrittenQuestionEvaluation>()
             };
 
             decimal totalScore = 0;
@@ -897,31 +896,29 @@ namespace SmartStudyFunc.Functions
                     {
                         QuestionText = question.QuestionText,
                         StudentAnswer = extractedText, // Full text for now - V2 engine will extract relevant part
-                        ModelAnswer = question.CorrectAnswer,
-                        MaxMarks = question.Marks,
-                        Subject = question.Subject ?? "General",
-                        QuestionType = question.QuestionType ?? "subjective",
-                        RubricSteps = question.RubricSteps ?? new System.Collections.Generic.List<RubricStep>()
+                        ModelAnswer = question.ModelAnswer,
+                        MaxMarks = question.MaxScore,
+                        Subject = ParseSubjectCategory(question.Subject ?? "Unknown")
                     };
 
                     _logger.LogInformation(
-                        "[V2_EVALUATE_QUESTION] Q{QuestionNumber}, Subject={Subject}, Type={Type}",
-                        question.QuestionNumber, context.Subject, context.QuestionType);
+                        "[V2_EVALUATE_QUESTION] Q{QuestionNumber}, Subject={Subject}",
+                        question.QuestionNumber, context.Subject);
 
                     // Route to appropriate V2 engine
                     var engineResult = await _subjectRouter.RouteAndEvaluateAsync(context, cancellationToken);
 
-                    var evaluation = new QuestionEvaluation
+                    var evaluation = new WrittenQuestionEvaluation
                     {
-                        QuestionId = question.Id,
+                        QuestionId = question.QuestionId,
                         QuestionNumber = question.QuestionNumber,
                         QuestionText = question.QuestionText,
                         ExtractedAnswer = extractedText,
-                        ModelAnswer = question.CorrectAnswer,
-                        MaxScore = question.Marks,
-                        AwardedScore = (decimal)engineResult.AwardedMarks,
-                        Feedback = engineResult.Feedback,
-                        RubricBreakdown = JsonSerializer.Serialize(engineResult.StepBreakdown),
+                        ModelAnswer = question.ModelAnswer,
+                        MaxScore = question.MaxScore,
+                        AwardedScore = (decimal)engineResult.Score,
+                        Feedback = engineResult.Reasoning,
+                        RubricBreakdown = JsonSerializer.Serialize(engineResult.Details),
                         EvaluatedAt = DateTime.UtcNow,
                         IsMcq = false
                     };
@@ -933,7 +930,7 @@ namespace SmartStudyFunc.Functions
 
                     _logger.LogInformation(
                         "[V2_QUESTION_EVALUATED] Q{QuestionNumber}: Score={Score}/{Max}, Engine={Engine}",
-                        question.QuestionNumber, evaluation.AwardedScore, evaluation.MaxScore, engineResult.EngineUsed);
+                        question.QuestionNumber, evaluation.AwardedScore, evaluation.MaxScore, engineResult.EngineType);
                 }
                 catch (Exception ex)
                 {
@@ -942,14 +939,14 @@ namespace SmartStudyFunc.Functions
                         question.QuestionNumber, ex.Message);
 
                     // Add failed evaluation
-                    result.QuestionEvaluations.Add(new QuestionEvaluation
+                    result.QuestionEvaluations.Add(new WrittenQuestionEvaluation
                     {
-                        QuestionId = question.Id,
+                        QuestionId = question.QuestionId,
                         QuestionNumber = question.QuestionNumber,
                         QuestionText = question.QuestionText,
                         ExtractedAnswer = extractedText,
-                        ModelAnswer = question.CorrectAnswer,
-                        MaxScore = question.Marks,
+                        ModelAnswer = question.ModelAnswer,
+                        MaxScore = question.MaxScore,
                         AwardedScore = 0,
                         Feedback = $"Evaluation failed: {ex.Message}",
                         RubricBreakdown = "[]",
@@ -957,7 +954,7 @@ namespace SmartStudyFunc.Functions
                         IsMcq = false
                     });
 
-                    maxPossibleScore += question.Marks;
+                    maxPossibleScore += question.MaxScore;
                 }
             }
 
@@ -985,6 +982,21 @@ namespace SmartStudyFunc.Functions
             if (percentage >= 60) return "C";
             if (percentage >= 50) return "D";
             return "F";
+        }
+
+        private SubjectCategory ParseSubjectCategory(string subject)
+        {
+            return subject?.ToLower() switch
+            {
+                "mathematics" or "math" or "maths" => SubjectCategory.Mathematics,
+                "physics" => SubjectCategory.Physics,
+                "chemistry" => SubjectCategory.Chemistry,
+                "biology" => SubjectCategory.Biology,
+                "social science" or "socialscience" or "social" => SubjectCategory.SocialScience,
+                "english" => SubjectCategory.English,
+                "hindi" => SubjectCategory.Hindi,
+                _ => SubjectCategory.Unknown
+            };
         }
     }
 }
