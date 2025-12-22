@@ -999,6 +999,19 @@ namespace SmartStudyFunc.Functions
                     // Route to appropriate V2 engine
                     var engineResult = await _subjectRouter.RouteAndEvaluateAsync(context, cancellationToken);
 
+                    // Create comprehensive rubric breakdown with extracted answer
+                    var rubricBreakdown = new
+                    {
+                        questionNumber = question.QuestionNumber,
+                        maxScore = question.MaxScore,
+                        awardedScore = (decimal)engineResult.MarksAwarded,
+                        extractedAnswer = extractedText,
+                        stepWiseBreakdown = engineResult.StepWiseBreakdown,
+                        keywords = engineResult.MatchedKeywords,
+                        rubric = $"Topic: {context.Subject}. Evaluate based on correct answer and understanding of concepts. Award partial credit for partially correct answers.",
+                        evaluationTimestamp = DateTime.UtcNow
+                    };
+
                     var evaluation = new WrittenQuestionEvaluation
                     {
                         QuestionId = question.QuestionId,
@@ -1009,7 +1022,7 @@ namespace SmartStudyFunc.Functions
                         MaxScore = question.MaxScore,
                         AwardedScore = (decimal)engineResult.MarksAwarded,
                         Feedback = engineResult.StudentFeedback,
-                        RubricBreakdown = JsonSerializer.Serialize(engineResult.StepWiseBreakdown),
+                        RubricBreakdown = JsonSerializer.Serialize(rubricBreakdown),
                         EvaluatedAt = DateTime.UtcNow,
                         IsMcq = false
                     };
@@ -1029,6 +1042,19 @@ namespace SmartStudyFunc.Functions
                         "[V2_QUESTION_FAILED] Q{QuestionNumber} failed: {Error}",
                         question.QuestionNumber, ex.Message);
 
+                    // Create rubric breakdown for failed evaluation
+                    var failedRubricBreakdown = new
+                    {
+                        questionNumber = question.QuestionNumber,
+                        maxScore = question.MaxScore,
+                        awardedScore = 0m,
+                        extractedAnswer = extractedText,
+                        stepWiseBreakdown = new List<object>(),
+                        keywords = new List<string>(),
+                        rubric = "Evaluation failed due to system error",
+                        evaluationTimestamp = DateTime.UtcNow
+                    };
+
                     // Add failed evaluation
                     result.QuestionEvaluations.Add(new WrittenQuestionEvaluation
                     {
@@ -1040,7 +1066,7 @@ namespace SmartStudyFunc.Functions
                         MaxScore = question.MaxScore,
                         AwardedScore = 0,
                         Feedback = $"Evaluation failed: {ex.Message}",
-                        RubricBreakdown = "[]",
+                        RubricBreakdown = JsonSerializer.Serialize(failedRubricBreakdown),
                         EvaluatedAt = DateTime.UtcNow,
                         IsMcq = false
                     });
